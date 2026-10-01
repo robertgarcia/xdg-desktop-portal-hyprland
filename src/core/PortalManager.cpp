@@ -675,6 +675,22 @@ void CPortalManager::getOutputExtents(uint32_t& w, uint32_t& h) {
     }
 }
 
+std::vector<SLogicalOutputBox> CPortalManager::getLogicalOutputBoxes() {
+    std::vector<SLogicalOutputBox> boxes;
+    for (auto& o : m_vOutputs) {
+        if (!o->logicalPositionValid || !o->logicalSizeValid || o->logicalWidth <= 0 || o->logicalHeight <= 0)
+            continue;
+        boxes.emplace_back(SLogicalOutputBox{
+            .x     = o->logicalX,
+            .y     = o->logicalY,
+            .w     = sc<uint32_t>(o->logicalWidth),
+            .h     = sc<uint32_t>(o->logicalHeight),
+            .scale = o->scale,
+        });
+    }
+    return boxes;
+}
+
 void CPortalManager::addTimer(const CTimer& timer) {
     Debug::log(TRACE, "[core] adding timer for {}ms", timer.duration());
     m_sTimersThread.timers.emplace_back(std::make_unique<CTimer>(timer));

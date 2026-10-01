@@ -82,9 +82,18 @@ class CRemoteDesktopPortal {
         struct eis*                     eis          = nullptr;
         int                             eisFd        = -1; // fd to poll for EIS events
         bool                            eisReady     = false;
+
+        // Size of the layout bounding box the EIS regions were announced in. EIS
+        // offsets are unsigned, so regions are shifted to start at 0,0 and absolute
+        // events arrive already relative to the box.
+        uint32_t                        eisExtentW   = 0;
+        uint32_t                        eisExtentH   = 0;
     };
 
     SSession* getSession(const sdbus::ObjectPath& path);
+
+    // Announce one EIS region per output, shifted so the layout box starts at 0,0
+    void      addLayoutRegions(eis_device* dev, SSession* session);
 
     // Keysym → keycode conversion (via xkbcommon)
     uint32_t keycodeFromKeysym(uint32_t sym, bool level0Only = false);

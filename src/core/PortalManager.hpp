@@ -56,6 +56,14 @@ struct SOutput {
     bool                logicalSizeValid     = false;
 };
 
+struct SLogicalOutputBox {
+    int32_t  x     = 0;
+    int32_t  y     = 0;
+    uint32_t w     = 0;
+    uint32_t h     = 0;
+    double   scale = 1.0;
+};
+
 struct SDMABUFModifier {
     uint32_t fourcc = 0;
     uint64_t mod    = 0;
@@ -131,6 +139,9 @@ class CPortalManager {
     // Get the logical coordinate extents from the active output(s).
     // Falls back to physical dimensions if logical not yet computed.
     void                         getOutputExtents(uint32_t& w, uint32_t& h);
+
+    // Logical geometry of every output whose xdg-output position and size are known
+    std::vector<SLogicalOutputBox> getLogicalOutputBoxes();
 
     // terminate after the event loop has been created. Before we can exit()
     void terminate();

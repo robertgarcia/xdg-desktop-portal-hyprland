@@ -1,7 +1,9 @@
 #include "RemoteDesktop.hpp"
 #include "../core/PortalManager.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <climits>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <libeis.h>
@@ -480,20 +482,9 @@ void CRemoteDesktopPortal::processEISEvents() {
                         eis_device_configure_capability(dev, EIS_DEVICE_CAP_SCROLL);
 
                         // A virtual device advertising POINTER_ABSOLUTE must have at least
-                        // one region (the desktop area its absolute coordinates map onto),
-                        // otherwise libei discards every absolute motion event.
-                        {
-                            uint32_t extentW = 3840, extentH = 2160; // fallback, no outputs yet
-                            if (g_pPortalManager)
-                                g_pPortalManager->getOutputExtents(extentW, extentH);
-                            if (auto* region = eis_device_new_region(dev)) {
-                                eis_region_set_offset(region, 0, 0);
-                                eis_region_set_size(region, extentW, extentH);
-                                eis_region_set_physical_scale(region, 1.0);
-                                eis_region_add(region);
-                                eis_region_unref(region);
-                            }
-                        }
+                        // one region, otherwise libei discards every absolute motion event.
+                        // Announce one region per output so clients see the real layout.
+                        addLayoutRegions(dev, s.get());
 
                         eis_device_add(dev);
                         // Sender clients (ei_new_sender, e.g. KDE Connect remote input) own
@@ -564,13 +555,14 @@ void CRemoteDesktopPortal::processEISEvents() {
             }
             case EIS_EVENT_POINTER_MOTION_ABSOLUTE: {
                 if (s->virtualPointer) {
-                    double x = eis_event_pointer_get_absolute_x(event);
-                    double y = eis_event_pointer_get_absolute_y(event);
-                    
-                    uint32_t extentW = 3840, extentH = 2160; // fallback
-                    if (g_pPortalManager)
-                        g_pPortalManager->getOutputExtents(extentW, extentH);
-                    s->virtualPointer->sendMotionAbsolute(time, (uint32_t)x, (uint32_t)y, extentW, extentH);
+                    if (s->eisExtentW == 0 || s->eisExtentH == 0)
+                        break;
+
+                    // already relative to the layout box, see addLayoutRegions().
+                    // The compositor maps virtual pointer absolute motion onto that same box.
+                    const double x = std::clamp(eis_event_pointer_get_absolute_x(event), 0.0, sc<double>(s->eisExtentW - 1));
+                    const double y = std::clamp(eis_event_pointer_get_absolute_y(event), 0.0, sc<double>(s->eisExtentH - 1));
+                    s->virtualPointer->sendMotionAbsolute(time, sc<uint32_t>(x), sc<uint32_t>(y), s->eisExtentW, s->eisExtentH);
                 }
                 break;
             }
@@ -640,6 +632,39 @@ void CRemoteDesktopPortal::processEISEvents() {
             eis_event_unref(event);
         }
     }
+}
+
+void CRemoteDesktopPortal::addLayoutRegions(eis_device* dev, SSession* session) {
+    auto boxes = g_pPortalManager->getLogicalOutputBoxes();
+    if (boxes.empty()) {
+        Debug::log(WARN, "[remotedesktop] no output geometry known yet, announcing a 1920x1080 region");
+        boxes.emplace_back(SLogicalOutputBox{.w = 1920, .h = 1080});
+    }
+
+    int32_t minX = INT32_MAX, minY = INT32_MAX, maxX = INT32_MIN, maxY = INT32_MIN;
+    for (const auto& b : boxes) {
+        minX = std::min(minX, b.x);
+        minY = std::min(minY, b.y);
+        maxX = std::max(maxX, b.x + sc<int32_t>(b.w));
+        maxY = std::max(maxY, b.y + sc<int32_t>(b.h));
+    }
+
+    session->eisExtentW = sc<uint32_t>(maxX - minX);
+    session->eisExtentH = sc<uint32_t>(maxY - minY);
+
+    for (const auto& b : boxes) {
+        auto* region = eis_device_new_region(dev);
+        if (!region)
+            continue;
+        eis_region_set_offset(region, sc<uint32_t>(b.x - minX), sc<uint32_t>(b.y - minY));
+        eis_region_set_size(region, b.w, b.h);
+        eis_region_set_physical_scale(region, b.scale);
+        eis_region_add(region);
+        eis_region_unref(region);
+        Debug::log(LOG, "[remotedesktop] EIS region {}x{} at {},{} (layout {},{}), scale {}", b.w, b.h, b.x - minX, b.y - minY, b.x, b.y, b.scale);
+    }
+
+    Debug::log(LOG, "[remotedesktop] EIS layout box {}x{}, origin {},{}", session->eisExtentW, session->eisExtentH, minX, minY);
 }
 
 // ─── Keysym → keycode conversion ─────────────────────────────────
