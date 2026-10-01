@@ -163,6 +163,13 @@ void CClipboardPortal::onSelectionWriteDone(sdbus::ObjectPath sessionHandle, uin
 
     requireClipboard(sessionHandle, "SelectionWriteDone");
 
+    // serials are sequential and easy to guess: only the session the transfer was
+    // sent to may finish it, or one session could cut another's paste short
+    if (!std::ranges::any_of(m_transfers, [&](const auto& t) { return t.serial == serial && t.session == sessionHandle; })) {
+        Debug::log(ERR, "[clipboard] SelectionWriteDone: no pending transfer with serial {} for this session", serial);
+        throw sdbus::Error{PORTAL_ERROR_FAILED, "No pending transfer with this serial"};
+    }
+
     Debug::log(success ? LOG : WARN, "[clipboard] SelectionWriteDone serial {} success {}", serial, success);
     endTransfer(serial);
 }
