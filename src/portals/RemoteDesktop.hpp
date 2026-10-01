@@ -85,6 +85,9 @@ class CRemoteDesktopPortal {
 
         uint32_t                deviceTypes    = 0; // bitmask: 1=keyboard, 2=pointer, 4=touchscreen
         bool                    started        = false;
+        // Start is waiting for the consent dialog: what the session asks for is
+        // frozen, so the user grants exactly what the dialog showed
+        bool                    starting       = false;
         bool                          clipboardRequested = false;
         bool                          clipboardEnabled   = false;
 

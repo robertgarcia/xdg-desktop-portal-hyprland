@@ -679,24 +679,6 @@ gbm_device* CPortalManager::createGBMDevice(drmDevice* dev) {
     return gbm_create_device(fd);
 }
 
-void CPortalManager::getOutputExtents(uint32_t& w, uint32_t& h) {
-    for (auto& o : m_vOutputs) {
-        if (o->logicalSizeValid && o->logicalWidth > 0 && o->logicalHeight > 0) {
-            w = o->logicalWidth;
-            h = o->logicalHeight;
-            return;
-        }
-    }
-    // Fallback: mode dimensions if logical not yet computed
-    for (auto& o : m_vOutputs) {
-        if (o->width > 0 && o->height > 0) {
-            w = o->width;
-            h = o->height;
-            return;
-        }
-    }
-}
-
 std::vector<SLogicalOutputBox> CPortalManager::getLogicalOutputBoxes() {
     std::vector<SLogicalOutputBox> boxes;
     for (auto& o : m_vOutputs) {

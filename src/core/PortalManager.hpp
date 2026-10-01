@@ -143,10 +143,6 @@ class CPortalManager {
     void                         addFdToEventLoop(int fd, short events, std::function<void()> callback);
     void                         removeFdFromEventLoop(int fd);
 
-    // Get the logical coordinate extents from the active output(s).
-    // Falls back to physical dimensions if logical not yet computed.
-    void                         getOutputExtents(uint32_t& w, uint32_t& h);
-
     // Logical geometry of every output whose xdg-output position and size are known
     std::vector<SLogicalOutputBox> getLogicalOutputBoxes();
 

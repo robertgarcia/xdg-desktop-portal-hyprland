@@ -237,6 +237,12 @@ dbUasv CRemoteDesktopPortal::onSelectDevices(sdbus::ObjectPath requestHandle, sd
         return {1, {}};
     }
 
+    // The frontend still lets an app select devices while Start waits for the user
+    if (PSESSION->started || PSESSION->starting) {
+        Debug::log(ERR, "[remotedesktop] SelectDevices: session {} already started", std::string{sessionHandle});
+        return {1, {}};
+    }
+
     for (auto& [k, v] : opts) {
         if (k == "types") {
             PSESSION->deviceTypes = v.get<uint32_t>();
@@ -273,6 +279,13 @@ void CRemoteDesktopPortal::onStart(StartResult&& result, sdbus::ObjectPath reque
         return;
     }
 
+    // The frontend allows a second Start while the first one waits for the user
+    if (PSESSION->starting) {
+        Debug::log(ERR, "[remotedesktop] Start: session {} is already starting", std::string{sessionHandle});
+        result.returnResults(2, {});
+        return;
+    }
+
     if (opts.contains("persist_mode"))
         PSESSION->persistMode = opts["persist_mode"].get<uint32_t>();
 
@@ -286,7 +299,8 @@ void CRemoteDesktopPortal::onStart(StartResult&& result, sdbus::ObjectPath reque
 
     // The dialog can stay open for long: wait for it on a thread so the other
     // sessions keep working, then finish on the main loop
-    auto pending = std::make_shared<StartResult>(std::move(result));
+    PSESSION->starting = true;
+    auto pending       = std::make_shared<StartResult>(std::move(result));
     std::thread([this, pending, sessionHandle, appID, devices = PSESSION->deviceTypes, clipboard = PSESSION->clipboardRequested]() {
         const auto CONSENT = askConsent(appID, devices, clipboard);
         g_pPortalManager->addTimerFromThread({0, [this, pending, sessionHandle, CONSENT]() {
@@ -296,6 +310,8 @@ void CRemoteDesktopPortal::onStart(StartResult&& result, sdbus::ObjectPath reque
                                                       pending->returnResults(2, {});
                                                       return;
                                                   }
+
+                                                  PSESSION->starting = false;
 
                                                   if (CONSENT == CONSENT_DENY) {
                                                       Debug::log(LOG, "[remotedesktop] Start: denied by the user");
@@ -478,22 +494,10 @@ void CRemoteDesktopPortal::onNotifyPointerMotionAbsolute(sdbus::ObjectPath sessi
                                                          uint32_t stream, double x, double y) {
     requireFrontendCaller(*m_pObject, "NotifyPointerMotionAbsolute");
 
-    const auto PSESSION = getSession(sessionHandle);
-    if (!PSESSION || !PSESSION->virtualPointer)
-        return;
-
-    // Get the logical coordinate extents from the active output(s).
-    // The x/y values from the frontend portal are in the stream's logical
-    // coordinate space (see the RemoteDesktop XML spec). We forward these
-    // with the correct extents so the compositor scales properly.
-    uint32_t extentW = 3840, extentH = 2160; // generous fallback
-    if (g_pPortalManager)
-        g_pPortalManager->getOutputExtents(extentW, extentH);
-
-    Debug::log(TRACE, "[remotedesktop] NotifyPointerMotionAbsolute: x={}, y={}, extents={}x{}", x, y, extentW, extentH);
-    PSESSION->virtualPointer->sendMotionAbsolute(currentTimeMs(), (uint32_t)x, (uint32_t)y, extentW, extentH);
-    PSESSION->virtualPointer->sendFrame();
-    wl_display_flush(g_pPortalManager->m_sWaylandConnection.display);
+    // x/y are relative to a ScreenCast stream of the session. These sessions have no
+    // streams, so there is nothing to map them onto (the frontend already refuses the
+    // call for that reason). Absolute motion goes through EIS, see addLayoutRegions().
+    Debug::log(WARN, "[remotedesktop] NotifyPointerMotionAbsolute: session {} has no stream {}, ignored", std::string{sessionHandle}, stream);
 }
 
 void CRemoteDesktopPortal::onNotifyPointerButton(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts, int32_t button,
@@ -867,7 +871,8 @@ bool CRemoteDesktopPortal::requestClipboard(const sdbus::ObjectPath& sessionHand
         return false;
     }
 
-    if (PSESSION->started) {
+    // the frontend still allows it while Start waits for the user, who was not asked about it
+    if (PSESSION->started || PSESSION->starting) {
         Debug::log(ERR, "[remotedesktop] RequestClipboard: session {} already started", std::string{sessionHandle});
         return false;
     }
