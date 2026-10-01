@@ -467,6 +467,8 @@ void CRemoteDesktopPortal::processEISEvents() {
                 eis_seat_configure_capability(newSeat, EIS_DEVICE_CAP_SCROLL);
                 eis_seat_configure_capability(newSeat, EIS_DEVICE_CAP_BUTTON);
                 eis_seat_add(newSeat);
+                // the client keeps its own reference to the seat
+                eis_seat_unref(newSeat);
                 Debug::log(LOG, "[remotedesktop] EIS seat added with all capabilities");
                 break;
             }
@@ -501,6 +503,8 @@ void CRemoteDesktopPortal::processEISEvents() {
                         // eis_device_start_emulating() is receiver-side API and must not be
                         // called for a sender client.
                         eis_device_resume(dev);
+                        // the seat keeps its own reference; ours would keep the device (and its keymap fd) alive forever
+                        eis_device_unref(dev);
                         Debug::log(LOG, "[remotedesktop] EIS pointer device added & resumed");
                     }
                 }
@@ -527,6 +531,8 @@ void CRemoteDesktopPortal::processEISEvents() {
                             Debug::log(ERR, "[remotedesktop] could not build a keymap for the EIS keyboard");
                         eis_device_add(dev);
                         eis_device_resume(dev);
+                        // the seat keeps its own reference; ours would keep the device (and its keymap fd) alive forever
+                        eis_device_unref(dev);
                         Debug::log(LOG, "[remotedesktop] EIS keyboard device added & resumed");
                     }
                 }
