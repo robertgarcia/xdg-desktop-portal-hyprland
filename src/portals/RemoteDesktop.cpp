@@ -179,6 +179,8 @@ CRemoteDesktopPortal::CRemoteDesktopPortal(SP<CCZwlrVirtualPointerManagerV1> poi
 CRemoteDesktopPortal::SSession::~SSession() {
     if (eisFd >= 0)
         g_pPortalManager->removeExtraPollFd(eisFd);
+    if (eisPointer)
+        eis_device_unref(eisPointer);
     // eisFd is owned by the eis context (eis_get_fd), eis_unref closes it
     if (eis)
         eis_unref(eis);
@@ -635,35 +637,8 @@ void CRemoteDesktopPortal::processEISEvents() {
             case EIS_EVENT_SEAT_BIND: {
                 Debug::log(LOG, "[remotedesktop] EIS seat bind");
                 // Create and announce a pointer device if requested
-                if (eis_event_seat_has_capability(event, EIS_DEVICE_CAP_POINTER) ||
-                    eis_event_seat_has_capability(event, EIS_DEVICE_CAP_POINTER_ABSOLUTE)) {
-                    auto* dev = eis_seat_new_device(seat);
-                    if (dev) {
-                        eis_device_configure_type(dev, EIS_DEVICE_TYPE_VIRTUAL);
-                        eis_device_configure_name(dev, "Hyprland virtual pointer");
-                        eis_device_configure_capability(dev, EIS_DEVICE_CAP_POINTER);
-                        eis_device_configure_capability(dev, EIS_DEVICE_CAP_POINTER_ABSOLUTE);
-                        eis_device_configure_capability(dev, EIS_DEVICE_CAP_BUTTON);
-                        eis_device_configure_capability(dev, EIS_DEVICE_CAP_SCROLL);
-
-                        // A virtual device advertising POINTER_ABSOLUTE must have at least
-                        // one region, otherwise libei discards every absolute motion event.
-                        // Announce one region per output so clients see the real layout.
-                        addLayoutRegions(dev, s.get());
-
-                        eis_device_add(dev);
-                        // Sender clients (ei_new_sender, e.g. KDE Connect remote input) own
-                        // the start-emulating handshake: eis_device_add() leaves the device
-                        // paused, and the client only begins emulating after receiving
-                        // EI_EVENT_DEVICE_RESUMED (emitted by eis_device_resume()).
-                        // eis_device_start_emulating() is receiver-side API and must not be
-                        // called for a sender client.
-                        eis_device_resume(dev);
-                        // the seat keeps its own reference; ours would keep the device (and its keymap fd) alive forever
-                        eis_device_unref(dev);
-                        Debug::log(LOG, "[remotedesktop] EIS pointer device added & resumed");
-                    }
-                }
+                if (eis_event_seat_has_capability(event, EIS_DEVICE_CAP_POINTER) || eis_event_seat_has_capability(event, EIS_DEVICE_CAP_POINTER_ABSOLUTE))
+                    addPointerDevice(seat, s.get());
                 if (eis_event_seat_has_capability(event, EIS_DEVICE_CAP_KEYBOARD)) {
                     auto* dev = eis_seat_new_device(seat);
                     if (dev) {
@@ -691,6 +666,14 @@ void CRemoteDesktopPortal::processEISEvents() {
                         eis_device_unref(dev);
                         Debug::log(LOG, "[remotedesktop] EIS keyboard device added & resumed");
                     }
+                }
+                break;
+            }
+            case EIS_EVENT_DEVICE_CLOSED: {
+                // the client is done with it, don't recreate it on the next layout change
+                if (eis_event_get_device(event) == s->eisPointer) {
+                    eis_device_unref(s->eisPointer);
+                    s->eisPointer = nullptr;
                 }
                 break;
             }
@@ -779,8 +762,71 @@ void CRemoteDesktopPortal::processEISEvents() {
     }
 }
 
+void CRemoteDesktopPortal::addPointerDevice(eis_seat* seat, SSession* session) {
+    auto* dev = eis_seat_new_device(seat);
+    if (!dev)
+        return;
+
+    eis_device_configure_type(dev, EIS_DEVICE_TYPE_VIRTUAL);
+    eis_device_configure_name(dev, "Hyprland virtual pointer");
+    eis_device_configure_capability(dev, EIS_DEVICE_CAP_POINTER);
+    eis_device_configure_capability(dev, EIS_DEVICE_CAP_POINTER_ABSOLUTE);
+    eis_device_configure_capability(dev, EIS_DEVICE_CAP_BUTTON);
+    eis_device_configure_capability(dev, EIS_DEVICE_CAP_SCROLL);
+
+    // A virtual device advertising POINTER_ABSOLUTE must have at least
+    // one region, otherwise libei discards every absolute motion event.
+    // Announce one region per output so clients see the real layout.
+    addLayoutRegions(dev, session);
+
+    eis_device_add(dev);
+    // Sender clients (ei_new_sender, e.g. KDE Connect remote input) own
+    // the start-emulating handshake: eis_device_add() leaves the device
+    // paused, and the client only begins emulating after receiving
+    // EI_EVENT_DEVICE_RESUMED (emitted by eis_device_resume()).
+    // eis_device_start_emulating() is receiver-side API and must not be
+    // called for a sender client.
+    eis_device_resume(dev);
+
+    // keep our reference: the device is replaced when the output layout changes
+    if (session->eisPointer)
+        eis_device_unref(session->eisPointer);
+    session->eisPointer = dev;
+    Debug::log(LOG, "[remotedesktop] EIS pointer device added & resumed");
+}
+
+static bool sameLayout(const std::vector<SLogicalOutputBox>& a, const std::vector<SLogicalOutputBox>& b) {
+    return std::ranges::equal(a, b, [](const auto& l, const auto& r) { return l.x == r.x && l.y == r.y && l.w == r.w && l.h == r.h && l.scale == r.scale; });
+}
+
+void CRemoteDesktopPortal::outputLayoutChanged() {
+    const auto BOXES = g_pPortalManager->getLogicalOutputBoxes();
+    // mid-hotplug the new output may not have its geometry yet, a later change follows
+    if (BOXES.empty())
+        return;
+
+    for (auto& s : m_vSessions) {
+        if (!s->eisPointer || sameLayout(s->eisLayout, BOXES))
+            continue;
+
+        // EIS regions are fixed once a device is added: replace the device. Clients
+        // see it removed and a new one added with the current outputs.
+        Debug::log(LOG, "[remotedesktop] output layout changed, replacing the EIS pointer of {}", std::string{s->sessionHandle});
+        auto* old  = s->eisPointer;
+        auto* seat = eis_device_get_seat(old);
+        eis_device_remove(old);
+        addPointerDevice(seat, s.get());
+        if (s->eisPointer == old) {
+            // the new device could not be created
+            eis_device_unref(old);
+            s->eisPointer = nullptr;
+        }
+    }
+}
+
 void CRemoteDesktopPortal::addLayoutRegions(eis_device* dev, SSession* session) {
     auto boxes = g_pPortalManager->getLogicalOutputBoxes();
+    session->eisLayout = boxes;
     if (boxes.empty()) {
         Debug::log(WARN, "[remotedesktop] no output geometry known yet, announcing a 1920x1080 region");
         boxes.emplace_back(SLogicalOutputBox{.w = 1920, .h = 1080});

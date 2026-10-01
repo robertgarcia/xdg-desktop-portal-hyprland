@@ -119,7 +119,9 @@ void CClipboardPortal::startTransfer(const sdbus::ObjectPath& sessionHandle, con
     Debug::log(LOG, "[clipboard] SelectionTransfer {} serial {} -> {}", mimeType, SERIAL, std::string{sessionHandle});
     m_pObject->emitSignal("SelectionTransfer").onInterface(INTERFACE_NAME).withArguments(sessionHandle, mimeType, SERIAL);
 
-    // a pasting app blocks until its fd is closed, never leave it hanging
+    // A pasting app blocks until its fd is closed, never leave it hanging. This only
+    // bounds the wait for SelectionWrite: once the fd is handed over, the session
+    // owns it and endTransfer has nothing left to close, however long the write takes.
     g_pPortalManager->addTimer({TRANSFER_TIMEOUT_MS, [this, SERIAL]() {
                                     if (std::ranges::any_of(m_transfers, [SERIAL](const auto& t) { return t.serial == SERIAL; })) {
                                         Debug::log(WARN, "[clipboard] transfer serial {} timed out", SERIAL);

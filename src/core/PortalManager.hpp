@@ -146,6 +146,9 @@ class CPortalManager {
     // Logical geometry of every output whose xdg-output position and size are known
     std::vector<SLogicalOutputBox> getLogicalOutputBoxes();
 
+    // An output appeared, went away or changed geometry: refresh what depends on the layout
+    void                         outputLayoutChanged();
+
     // terminate after the event loop has been created. Before we can exit()
     void terminate();
 
@@ -159,6 +162,8 @@ class CPortalManager {
     std::mutex              m_mExtraPollMutex;
     std::vector<int>        m_vExtraPollFds;
     std::vector<short>      m_vExtraPollRevents;
+
+    bool                    m_bOutputLayoutRefreshPending = false;
 
     struct {
         std::condition_variable              loopSignal;

@@ -35,6 +35,7 @@ SOutput::SOutput(SP<CCWlOutput> output_) : output(output_) {
     output->setDone([](CCWlOutput* r) {
         if (g_pPortalManager->m_sPortals.inputCapture != nullptr)
             g_pPortalManager->m_sPortals.inputCapture->zonesChanged();
+        g_pPortalManager->outputLayoutChanged();
     });
 }
 
@@ -57,6 +58,7 @@ void CPortalManager::setupXDGOutput(SOutput* output) {
     output->xdgOutput->setDone([](CCZxdgOutputV1* r) {
         if (g_pPortalManager->m_sPortals.inputCapture != nullptr)
             g_pPortalManager->m_sPortals.inputCapture->zonesChanged();
+        g_pPortalManager->outputLayoutChanged();
     });
 }
 
@@ -282,7 +284,21 @@ void CPortalManager::onGlobal(uint32_t name, const char* interface, uint32_t ver
 }
 
 void CPortalManager::onGlobalRemoved(uint32_t name) {
-    std::erase_if(m_vOutputs, [&](const auto& other) { return other->id == name; });
+    if (std::erase_if(m_vOutputs, [&](const auto& other) { return other->id == name; }) > 0)
+        outputLayoutChanged();
+}
+
+void CPortalManager::outputLayoutChanged() {
+    // a hotplug or rearrangement sends a burst of events, one per output and protocol
+    if (m_bOutputLayoutRefreshPending)
+        return;
+
+    m_bOutputLayoutRefreshPending = true;
+    addTimer({100, [this]() {
+                  m_bOutputLayoutRefreshPending = false;
+                  if (m_sPortals.remoteDesktop)
+                      m_sPortals.remoteDesktop->outputLayoutChanged();
+              }});
 }
 
 void CPortalManager::init() {
@@ -401,30 +417,20 @@ void CPortalManager::startEventLoop() {
     std::thread pollThr([this]() {
         while (1) {
             // Build combined pollfds: core fds + extra (EIS) fds
-            const int     MAX_FDS = 16;
-            pollfd        combinedPfds[MAX_FDS];
-            int           totalNfds = 0;
-
             // Core fds are registered once before this thread starts and are never mutated afterwards
-            for (auto const& p : m_sEventLoopInternals.pollFds) {
-                if (totalNfds < MAX_FDS)
-                    combinedPfds[totalNfds++] = p;
-            }
-            const int coreCount = totalNfds;
+            std::vector<pollfd> combinedPfds = m_sEventLoopInternals.pollFds;
+            const int           coreCount    = combinedPfds.size();
 
-            // Extra fds (EIS sockets) are added/removed dynamically under m_mExtraPollMutex
+            // Extra fds (EIS sockets) are added/removed dynamically under m_mExtraPollMutex.
+            // No fixed cap: a dropped fd would leave its session silently dead.
             {
                 std::lock_guard<std::mutex> lg(m_mExtraPollMutex);
-                for (int fd : m_vExtraPollFds) {
-                    if (totalNfds < MAX_FDS) {
-                        combinedPfds[totalNfds] = {.fd = fd, .events = POLLIN};
-                        totalNfds++;
-                    } else
-                        Debug::log(ERR, "[core] too many extra poll fds, dropping");
-                }
+                for (int fd : m_vExtraPollFds)
+                    combinedPfds.emplace_back(pollfd{.fd = fd, .events = POLLIN});
             }
+            const int totalNfds = combinedPfds.size();
 
-            int ret = poll(combinedPfds, totalNfds, 5000);
+            int       ret = poll(combinedPfds.data(), totalNfds, 5000);
 
             // Copy revents for core fds back into the shared vector
             for (int i = 0; i < coreCount; i++)

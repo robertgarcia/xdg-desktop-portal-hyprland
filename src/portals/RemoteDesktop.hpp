@@ -18,6 +18,7 @@ struct eis;
 struct eis_client;
 struct eis_seat;
 struct eis_device;
+struct SLogicalOutputBox;
 
 class CRemoteDesktopPortal {
   public:
@@ -66,6 +67,9 @@ class CRemoteDesktopPortal {
     // EIS event processing (called from the main event loop)
     void processEISEvents();
 
+    // The outputs were added, removed or rearranged: re-announce the EIS regions
+    void outputLayoutChanged();
+
   private:
     struct SSession {
         SSession(const std::string& app, const sdbus::ObjectPath& req, const sdbus::ObjectPath& sess)
@@ -113,6 +117,10 @@ class CRemoteDesktopPortal {
         // events arrive already relative to the box.
         uint32_t eisExtentW = 0;
         uint32_t eisExtentH = 0;
+
+        // The EIS pointer device (we hold a reference) and the outputs its regions describe
+        eis_device*                    eisPointer = nullptr;
+        std::vector<SLogicalOutputBox> eisLayout;
     };
 
     SSession* getSession(const sdbus::ObjectPath& path);
@@ -125,6 +133,9 @@ class CRemoteDesktopPortal {
 
     // Announce one EIS region per output, shifted so the layout box starts at 0,0
     void addLayoutRegions(eis_device* dev, SSession* session);
+
+    // Create, announce and resume the session's EIS pointer, replacing the previous one
+    void addPointerDevice(eis_seat* seat, SSession* session);
 
     // Keysym → keycode conversion (via xkbcommon)
     uint32_t keycodeFromKeysym(uint32_t sym, bool level0Only = false);
