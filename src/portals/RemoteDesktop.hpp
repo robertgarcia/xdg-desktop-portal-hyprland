@@ -75,8 +75,8 @@ class CRemoteDesktopPortal {
         SP<CCZwlrVirtualPointerV1>      virtualPointer;
         SP<CCZwpVirtualKeyboardV1>      virtualKeyboard;
 
-        // XKB modifier tracking for sendModifiers()
-        uint32_t                        modDepressed = 0;
+        // Modifier tracking, built from the same keymap the virtual keyboard uses
+        struct xkb_state*               xkbState     = nullptr;
 
         // EIS/libei state (created by ConnectToEIS)
         struct eis*                     eis          = nullptr;
@@ -91,6 +91,9 @@ class CRemoteDesktopPortal {
     };
 
     SSession* getSession(const sdbus::ObjectPath& path);
+
+    // Send a key and keep the compositor's modifier state in sync with it
+    void      sendKey(SSession* session, uint32_t evdevKey, bool pressed, uint32_t time);
 
     // Announce one EIS region per output, shifted so the layout box starts at 0,0
     void      addLayoutRegions(eis_device* dev, SSession* session);

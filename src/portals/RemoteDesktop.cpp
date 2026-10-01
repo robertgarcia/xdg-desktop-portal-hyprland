@@ -15,23 +15,6 @@ static uint32_t currentTimeMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-// Map linux evdev keycodes to xkb modifier bits.
-// Standard xkb modifier indices: Shift=0, Lock=1, Control=2, Mod1(Alt)=3, Mod4(Super)=6
-static uint32_t xkbModForEvdev(int evdevKeycode) {
-    switch (evdevKeycode) {
-    case 42:  case 54:  return 1 << 0; // KEY_LEFTSHIFT, KEY_RIGHTSHIFT
-    case 29:  case 97:  return 1 << 2; // KEY_LEFTCTRL, KEY_RIGHTCTRL
-    case 56:  case 100: return 1 << 3; // KEY_LEFTALT,  KEY_RIGHTALT
-    case 125: case 126: return 1 << 6; // KEY_LEFTMETA, KEY_RIGHTMETA
-    default: return 0;
-    }
-}
-
-static void updateModifiers(CCZwpVirtualKeyboardV1* vk, uint32_t modDepressed) {
-    if (vk)
-        vk->sendModifiers(modDepressed, 0, 0, 0);
-}
-
 // ─── CRemoteDesktopPortal implementation ─────────────────────────
 
 CRemoteDesktopPortal::CRemoteDesktopPortal(SP<CCZwlrVirtualPointerManagerV1> pointerMgr, SP<CCZwpVirtualKeyboardManagerV1> keyboardMgr) {
@@ -101,6 +84,9 @@ CRemoteDesktopPortal::SSession::~SSession() {
     // eisFd is owned by the eis context (eis_get_fd), eis_unref closes it
     if (eis)
         eis_unref(eis);
+
+    if (xkbState)
+        xkb_state_unref(xkbState);
 
     // the generated destructors send destroy for the virtual devices
     virtualPointer.reset();
@@ -236,6 +222,9 @@ dbUasv CRemoteDesktopPortal::onStart(sdbus::ObjectPath requestHandle, sdbus::Obj
                     }
                     xkb_context_unref(ctx);
                 }
+
+                if (m_xkbKeymap)
+                    PSESSION->xkbState = xkb_state_new(m_xkbKeymap);
 
                 wl_display_flush(display);
                 Debug::log(LOG, "[remotedesktop] virtual keyboard created with keymap");
@@ -386,16 +375,7 @@ void CRemoteDesktopPortal::onNotifyKeyboardKeycode(sdbus::ObjectPath sessionHand
 
     
 
-    uint32_t modBit = xkbModForEvdev(keycode);
-    if (modBit) {
-        if (state == 1)
-            PSESSION->modDepressed |= modBit;
-        else
-            PSESSION->modDepressed &= ~modBit;
-    }
-
-    PSESSION->virtualKeyboard->sendKey(currentTimeMs(), keycode, state);
-    updateModifiers(PSESSION->virtualKeyboard.get(), PSESSION->modDepressed);
+    sendKey(PSESSION, keycode, state == 1, currentTimeMs());
     wl_display_flush(g_pPortalManager->m_sWaylandConnection.display);
 }
 
@@ -416,8 +396,7 @@ void CRemoteDesktopPortal::onNotifyKeyboardKeysym(sdbus::ObjectPath sessionHandl
         return;
     }
 
-    
-    PSESSION->virtualKeyboard->sendKey(currentTimeMs(), keycode, state);
+    sendKey(PSESSION, keycode, state == 1, currentTimeMs());
     wl_display_flush(g_pPortalManager->m_sWaylandConnection.display);
 }
 
@@ -610,9 +589,7 @@ void CRemoteDesktopPortal::processEISEvents() {
             }
             case EIS_EVENT_KEYBOARD_KEY: {
                 if (s->virtualKeyboard) {
-                    uint32_t key   = eis_event_keyboard_get_key(event);
-                    uint32_t state = eis_event_keyboard_get_key_is_press(event) ? 1 : 0;
-                    s->virtualKeyboard->sendKey(time, key, state);
+                    sendKey(s.get(), eis_event_keyboard_get_key(event), eis_event_keyboard_get_key_is_press(event), time);
                 }
                 break;
             }
@@ -665,6 +642,28 @@ void CRemoteDesktopPortal::addLayoutRegions(eis_device* dev, SSession* session) 
     }
 
     Debug::log(LOG, "[remotedesktop] EIS layout box {}x{}, origin {},{}", session->eisExtentW, session->eisExtentH, minX, minY);
+}
+
+void CRemoteDesktopPortal::sendKey(SSession* session, uint32_t evdevKey, bool pressed, uint32_t time) {
+    if (!session->virtualKeyboard)
+        return;
+
+    session->virtualKeyboard->sendKey(time, evdevKey, pressed ? 1 : 0);
+
+    // The virtual keyboard protocol does not derive modifiers from key events,
+    // the client has to send them. Track them with a real xkb state so Shift,
+    // AltGr, CapsLock and friends work no matter which path the key came from.
+    if (!session->xkbState)
+        return;
+
+    const auto CHANGED = xkb_state_update_key(session->xkbState, evdevKey + 8 /* evdev -> xkb */, pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
+    if (!(CHANGED & (XKB_STATE_MODS_DEPRESSED | XKB_STATE_MODS_LATCHED | XKB_STATE_MODS_LOCKED | XKB_STATE_LAYOUT_EFFECTIVE)))
+        return;
+
+    session->virtualKeyboard->sendModifiers(xkb_state_serialize_mods(session->xkbState, XKB_STATE_MODS_DEPRESSED),
+                                            xkb_state_serialize_mods(session->xkbState, XKB_STATE_MODS_LATCHED),
+                                            xkb_state_serialize_mods(session->xkbState, XKB_STATE_MODS_LOCKED),
+                                            xkb_state_serialize_layout(session->xkbState, XKB_STATE_LAYOUT_EFFECTIVE));
 }
 
 // ─── Keysym → keycode conversion ─────────────────────────────────
