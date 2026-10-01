@@ -1,5 +1,6 @@
 #include "RemoteDesktop.hpp"
 #include "../core/PortalManager.hpp"
+#include "../shared/FrontendGuard.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -127,6 +128,8 @@ CRemoteDesktopPortal::SSession::~SSession() {
 
 dbUasv CRemoteDesktopPortal::onCreateSession(sdbus::ObjectPath requestHandle, sdbus::ObjectPath sessionHandle, std::string appID,
                                              std::unordered_map<std::string, sdbus::Variant> opts) {
+    requireFrontendCaller(*m_pObject, "CreateSession");
+
     Debug::log(LOG, "[remotedesktop] New session: appid={} req={} sess={}", appID, std::string{requestHandle}, std::string{sessionHandle});
 
     const auto PSESSION = m_vSessions.emplace_back(std::make_unique<SSession>(appID, requestHandle, sessionHandle)).get();
@@ -158,6 +161,8 @@ dbUasv CRemoteDesktopPortal::onCreateSession(sdbus::ObjectPath requestHandle, sd
 
 dbUasv CRemoteDesktopPortal::onSelectDevices(sdbus::ObjectPath requestHandle, sdbus::ObjectPath sessionHandle, std::string appID,
                                              std::unordered_map<std::string, sdbus::Variant> opts) {
+    requireFrontendCaller(*m_pObject, "SelectDevices");
+
     const auto PSESSION = getSession(sessionHandle);
 
     if (!PSESSION) {
@@ -182,6 +187,8 @@ dbUasv CRemoteDesktopPortal::onSelectDevices(sdbus::ObjectPath requestHandle, sd
 
 dbUasv CRemoteDesktopPortal::onStart(sdbus::ObjectPath requestHandle, sdbus::ObjectPath sessionHandle, std::string appID, std::string parentWindow,
                                      std::unordered_map<std::string, sdbus::Variant> opts) {
+    requireFrontendCaller(*m_pObject, "Start");
+
     const auto PSESSION = getSession(sessionHandle);
 
     if (!PSESSION) {
@@ -274,6 +281,8 @@ dbUasv CRemoteDesktopPortal::onStart(sdbus::ObjectPath requestHandle, sdbus::Obj
 
 sdbus::UnixFd CRemoteDesktopPortal::onConnectToEIS(sdbus::ObjectPath sessionHandle, std::string appID,
                                                    std::unordered_map<std::string, sdbus::Variant> opts) {
+    requireFrontendCaller(*m_pObject, "ConnectToEIS");
+
     const auto PSESSION = getSession(sessionHandle);
 
     if (!PSESSION) {
@@ -324,6 +333,8 @@ sdbus::UnixFd CRemoteDesktopPortal::onConnectToEIS(sdbus::ObjectPath sessionHand
 
 void CRemoteDesktopPortal::onNotifyPointerMotion(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts, double dx,
                                                  double dy) {
+    requireFrontendCaller(*m_pObject, "NotifyPointerMotion");
+
     const auto PSESSION = getSession(sessionHandle);
     if (!PSESSION || !PSESSION->virtualPointer)
         return;
@@ -336,6 +347,8 @@ void CRemoteDesktopPortal::onNotifyPointerMotion(sdbus::ObjectPath sessionHandle
 
 void CRemoteDesktopPortal::onNotifyPointerMotionAbsolute(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts,
                                                          uint32_t stream, double x, double y) {
+    requireFrontendCaller(*m_pObject, "NotifyPointerMotionAbsolute");
+
     const auto PSESSION = getSession(sessionHandle);
     if (!PSESSION || !PSESSION->virtualPointer)
         return;
@@ -356,6 +369,8 @@ void CRemoteDesktopPortal::onNotifyPointerMotionAbsolute(sdbus::ObjectPath sessi
 
 void CRemoteDesktopPortal::onNotifyPointerButton(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts, int32_t button,
                                                  uint32_t state) {
+    requireFrontendCaller(*m_pObject, "NotifyPointerButton");
+
     const auto PSESSION = getSession(sessionHandle);
     if (!PSESSION || !PSESSION->virtualPointer)
         return;
@@ -367,6 +382,8 @@ void CRemoteDesktopPortal::onNotifyPointerButton(sdbus::ObjectPath sessionHandle
 
 void CRemoteDesktopPortal::onNotifyPointerAxis(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts, double dx,
                                                double dy) {
+    requireFrontendCaller(*m_pObject, "NotifyPointerAxis");
+
     const auto PSESSION = getSession(sessionHandle);
     if (!PSESSION || !PSESSION->virtualPointer)
         return;
@@ -386,6 +403,8 @@ void CRemoteDesktopPortal::onNotifyPointerAxis(sdbus::ObjectPath sessionHandle, 
 
 void CRemoteDesktopPortal::onNotifyPointerAxisDiscrete(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts,
                                                        uint32_t axis, int32_t steps) {
+    requireFrontendCaller(*m_pObject, "NotifyPointerAxisDiscrete");
+
     const auto PSESSION = getSession(sessionHandle);
     if (!PSESSION || !PSESSION->virtualPointer)
         return;
@@ -399,6 +418,8 @@ void CRemoteDesktopPortal::onNotifyPointerAxisDiscrete(sdbus::ObjectPath session
 
 void CRemoteDesktopPortal::onNotifyKeyboardKeycode(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts,
                                                    int32_t keycode, uint32_t state) {
+    requireFrontendCaller(*m_pObject, "NotifyKeyboardKeycode");
+
     const auto PSESSION = getSession(sessionHandle);
     if (!PSESSION || !PSESSION->virtualKeyboard)
         return;
@@ -409,6 +430,8 @@ void CRemoteDesktopPortal::onNotifyKeyboardKeycode(sdbus::ObjectPath sessionHand
 
 void CRemoteDesktopPortal::onNotifyKeyboardKeysym(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts,
                                                    int32_t keysym, uint32_t state) {
+    requireFrontendCaller(*m_pObject, "NotifyKeyboardKeysym");
+
     const auto PSESSION = getSession(sessionHandle);
     if (!PSESSION || !PSESSION->virtualKeyboard)
         return;

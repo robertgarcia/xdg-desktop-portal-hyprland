@@ -1,5 +1,6 @@
 #include "Clipboard.hpp"
 #include "../core/PortalManager.hpp"
+#include "../shared/FrontendGuard.hpp"
 #include "../helpers/Log.hpp"
 
 #include <algorithm>
@@ -78,6 +79,8 @@ void CClipboardPortal::requireClipboard(const sdbus::ObjectPath& sessionHandle, 
 }
 
 void CClipboardPortal::onRequestClipboard(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts) {
+    requireFrontendCaller(*m_pObject, "RequestClipboard");
+
     Debug::log(LOG, "[clipboard] RequestClipboard for session {}", std::string{sessionHandle});
 
     if (!g_pPortalManager->m_sPortals.remoteDesktop || !g_pPortalManager->m_sPortals.remoteDesktop->requestClipboard(sessionHandle))
@@ -85,6 +88,8 @@ void CClipboardPortal::onRequestClipboard(sdbus::ObjectPath sessionHandle, std::
 }
 
 void CClipboardPortal::onSetSelection(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts) {
+    requireFrontendCaller(*m_pObject, "SetSelection");
+
     requireClipboard(sessionHandle, "SetSelection");
 
     std::vector<std::string> mimeTypes;
@@ -134,6 +139,8 @@ void CClipboardPortal::endTransfer(uint32_t serial) {
 }
 
 sdbus::UnixFd CClipboardPortal::onSelectionWrite(sdbus::ObjectPath sessionHandle, uint32_t serial) {
+    requireFrontendCaller(*m_pObject, "SelectionWrite");
+
     requireClipboard(sessionHandle, "SelectionWrite");
 
     const auto IT = std::ranges::find_if(m_transfers, [&](const auto& t) { return t.serial == serial && t.session == sessionHandle; });
@@ -152,6 +159,8 @@ sdbus::UnixFd CClipboardPortal::onSelectionWrite(sdbus::ObjectPath sessionHandle
 }
 
 void CClipboardPortal::onSelectionWriteDone(sdbus::ObjectPath sessionHandle, uint32_t serial, bool success) {
+    requireFrontendCaller(*m_pObject, "SelectionWriteDone");
+
     requireClipboard(sessionHandle, "SelectionWriteDone");
 
     Debug::log(success ? LOG : WARN, "[clipboard] SelectionWriteDone serial {} success {}", serial, success);
@@ -176,6 +185,8 @@ void CClipboardPortal::sessionClosed(const sdbus::ObjectPath& sessionHandle) {
 }
 
 sdbus::UnixFd CClipboardPortal::onSelectionRead(sdbus::ObjectPath sessionHandle, std::string mimeType) {
+    requireFrontendCaller(*m_pObject, "SelectionRead");
+
     requireClipboard(sessionHandle, "SelectionRead");
 
     // Reading our own source would ask this very session for the data while it waits
