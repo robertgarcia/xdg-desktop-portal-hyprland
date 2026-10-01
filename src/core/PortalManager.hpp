@@ -132,6 +132,8 @@ class CPortalManager {
     std::vector<SDMABUFModifier> m_vDMABUFMods;
 
     void                         addTimer(const CTimer& timer);
+    // addTimer for threads other than the main loop
+    void                         addTimerFromThread(const CTimer& timer);
 
     gbm_device*                  createGBMDevice(drmDevice* dev);
 

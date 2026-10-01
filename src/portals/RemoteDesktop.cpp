@@ -3,6 +3,8 @@
 #include "../shared/FrontendGuard.hpp"
 
 #include <algorithm>
+#include <hyprutils/os/Process.hpp>
+#include <thread>
 #include <chrono>
 #include <climits>
 #include <sys/mman.h>
@@ -46,7 +48,76 @@ static int keymapToFd(xkb_keymap* keymap, size_t& size) {
     return FD;
 }
 
+using namespace Hyprutils::OS;
+
 static const sdbus::Error::Name PORTAL_ERROR_FAILED = sdbus::Error::Name{"org.freedesktop.portal.Error.Failed"};
+
+// restore_data we hand out for "always allow": (vendor, version, granted bitmask).
+// The bitmask is the device types plus RESTORE_CLIPBOARD_BIT.
+static const std::string       RESTORE_VENDOR        = "hyprland";
+constexpr uint32_t             RESTORE_VERSION       = 1;
+constexpr uint32_t             RESTORE_CLIPBOARD_BIT = 1 << 16;
+
+static std::optional<uint32_t> parseRestoreData(const sdbus::Variant& v) {
+    try {
+        const auto DATA = v.get<sdbus::Struct<std::string, uint32_t, sdbus::Variant>>();
+        if (std::get<0>(DATA) != RESTORE_VENDOR || std::get<1>(DATA) != RESTORE_VERSION)
+            return std::nullopt;
+        return std::get<2>(DATA).get<uint32_t>();
+    } catch (const std::exception& e) {
+        Debug::log(WARN, "[remotedesktop] ignoring unreadable restore_data: {}", e.what());
+        return std::nullopt;
+    }
+}
+
+static const std::string DIALOG_DENY   = "Deny";
+static const std::string DIALOG_ONCE   = "Allow once";
+static const std::string DIALOG_ALWAYS = "Always allow";
+
+// Ask the user with hyprland-dialog whether an app may control the input. Blocks
+// until answered; anything but an explicit allow, including a closed dialog, denies.
+static CRemoteDesktopPortal::eConsent askConsent(const std::string& appID, uint32_t devices, bool clipboard) {
+    std::vector<std::string> what;
+    if (devices & 1)
+        what.emplace_back("keyboard");
+    if (devices & 2)
+        what.emplace_back("pointer");
+    if (clipboard)
+        what.emplace_back("clipboard");
+
+    std::string list;
+    for (size_t i = 0; i < what.size(); ++i)
+        list += (i == 0 ? "" : i + 1 == what.size() ? " and " : ", ") + what[i];
+
+    // the app id comes from the frontend, still keep markup characters out of the dialog
+    std::string app = appID.empty() ? "An application" : appID;
+    std::erase_if(app, [](char c) { return c == '<' || c == '>' || c == '&'; });
+
+    CProcess    proc("hyprland-dialog",
+                     {"--title", "Remote desktop", "--apptitle", "Allow remote control?", "--text", app + " wants to control your " + (list.empty() ? "input" : list) + ".",
+                      "--buttons", DIALOG_DENY + ";" + DIALOG_ONCE + ";" + DIALOG_ALWAYS});
+
+    const char* WAYLAND_DISPLAY             = getenv("WAYLAND_DISPLAY");
+    const char* HYPRLAND_INSTANCE_SIGNATURE = getenv("HYPRLAND_INSTANCE_SIGNATURE");
+    proc.addEnv("WAYLAND_DISPLAY", WAYLAND_DISPLAY ? WAYLAND_DISPLAY : "");
+    proc.addEnv("HYPRLAND_INSTANCE_SIGNATURE", HYPRLAND_INSTANCE_SIGNATURE ? HYPRLAND_INSTANCE_SIGNATURE : "0");
+
+    if (!proc.runSync()) {
+        Debug::log(ERR, "[remotedesktop] could not run hyprland-dialog, denying");
+        return CRemoteDesktopPortal::CONSENT_DENY;
+    }
+
+    std::string answer = proc.stdOut();
+    while (!answer.empty() && std::isspace(sc<unsigned char>(answer.back())))
+        answer.pop_back();
+
+    Debug::log(LOG, "[remotedesktop] consent dialog answered: \"{}\"", answer);
+    if (answer == DIALOG_ALWAYS)
+        return CRemoteDesktopPortal::CONSENT_ALWAYS;
+    if (answer == DIALOG_ONCE)
+        return CRemoteDesktopPortal::CONSENT_ONCE;
+    return CRemoteDesktopPortal::CONSENT_DENY;
+}
 
 // ─── CRemoteDesktopPortal implementation ─────────────────────────
 
@@ -62,48 +133,42 @@ CRemoteDesktopPortal::CRemoteDesktopPortal(SP<CCZwlrVirtualPointerManagerV1> poi
     m_pObject = sdbus::createObject(*g_pPortalManager->getConnection(), OBJECT_PATH);
 
     m_pObject
-        ->addVTable(sdbus::registerMethod("CreateSession")
-                        .implementedAs([this](sdbus::ObjectPath o1, sdbus::ObjectPath o2, std::string s,
-                                              std::unordered_map<std::string, sdbus::Variant> m) { return onCreateSession(o1, o2, s, m); }),
-                    sdbus::registerMethod("SelectDevices")
-                        .implementedAs([this](sdbus::ObjectPath o1, sdbus::ObjectPath o2, std::string s,
-                                              std::unordered_map<std::string, sdbus::Variant> m) { return onSelectDevices(o1, o2, s, m); }),
-                    sdbus::registerMethod("Start")
-                        .implementedAs([this](sdbus::ObjectPath o1, sdbus::ObjectPath o2, std::string s1, std::string s2,
-                                              std::unordered_map<std::string, sdbus::Variant> m) { return onStart(o1, o2, s1, s2, m); }),
-                    sdbus::registerMethod("ConnectToEIS")
-                        .implementedAs([this](sdbus::ObjectPath o, std::string s, std::unordered_map<std::string, sdbus::Variant> m) {
-                            return onConnectToEIS(o, s, m);
-                        }),
-                    sdbus::registerMethod("NotifyPointerMotion")
-                        .implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, double d1, double d2) {
-                            onNotifyPointerMotion(o, m, d1, d2);
-                        }),
-                    sdbus::registerMethod("NotifyPointerMotionAbsolute")
-                        .implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, uint32_t u1, double d1,
-                                              double d2) { onNotifyPointerMotionAbsolute(o, m, u1, d1, d2); }),
-                    sdbus::registerMethod("NotifyPointerButton")
-                        .implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, int32_t i1, uint32_t u1) {
-                            onNotifyPointerButton(o, m, i1, u1);
-                        }),
-                    sdbus::registerMethod("NotifyPointerAxis")
-                        .implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, double d1, double d2) {
-                            onNotifyPointerAxis(o, m, d1, d2);
-                        }),
-                    sdbus::registerMethod("NotifyPointerAxisDiscrete")
-                        .implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, uint32_t u1, int32_t i1) {
-                            onNotifyPointerAxisDiscrete(o, m, u1, i1);
-                        }),
-                    sdbus::registerMethod("NotifyKeyboardKeycode")
-                        .implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, int32_t i1, uint32_t u1) {
-                            onNotifyKeyboardKeycode(o, m, i1, u1);
-                        }),
-                    sdbus::registerMethod("NotifyKeyboardKeysym")
-                        .implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, int32_t i1, uint32_t u1) {
-                            onNotifyKeyboardKeysym(o, m, i1, u1);
-                        }),
-                    sdbus::registerProperty("AvailableDeviceTypes").withGetter([this]() { return availableDeviceTypes(); }),
-                    sdbus::registerProperty("version").withGetter([this]() { return version(); }))
+        ->addVTable(
+            sdbus::registerMethod("CreateSession")
+                .implementedAs(
+                    [this](sdbus::ObjectPath o1, sdbus::ObjectPath o2, std::string s, std::unordered_map<std::string, sdbus::Variant> m) { return onCreateSession(o1, o2, s, m); }),
+            sdbus::registerMethod("SelectDevices")
+                .implementedAs(
+                    [this](sdbus::ObjectPath o1, sdbus::ObjectPath o2, std::string s, std::unordered_map<std::string, sdbus::Variant> m) { return onSelectDevices(o1, o2, s, m); }),
+            sdbus::registerMethod("Start").implementedAs([this](StartResult&& result, sdbus::ObjectPath o1, sdbus::ObjectPath o2, std::string s1, std::string s2,
+                                                                std::unordered_map<std::string, sdbus::Variant> m) { onStart(std::move(result), o1, o2, s1, s2, m); }),
+            sdbus::registerMethod("ConnectToEIS").implementedAs([this](sdbus::ObjectPath o, std::string s, std::unordered_map<std::string, sdbus::Variant> m) {
+                return onConnectToEIS(o, s, m);
+            }),
+            sdbus::registerMethod("NotifyPointerMotion").implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, double d1, double d2) {
+                onNotifyPointerMotion(o, m, d1, d2);
+            }),
+            sdbus::registerMethod("NotifyPointerMotionAbsolute")
+                .implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, uint32_t u1, double d1, double d2) {
+                    onNotifyPointerMotionAbsolute(o, m, u1, d1, d2);
+                }),
+            sdbus::registerMethod("NotifyPointerButton").implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, int32_t i1, uint32_t u1) {
+                onNotifyPointerButton(o, m, i1, u1);
+            }),
+            sdbus::registerMethod("NotifyPointerAxis").implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, double d1, double d2) {
+                onNotifyPointerAxis(o, m, d1, d2);
+            }),
+            sdbus::registerMethod("NotifyPointerAxisDiscrete")
+                .implementedAs(
+                    [this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, uint32_t u1, int32_t i1) { onNotifyPointerAxisDiscrete(o, m, u1, i1); }),
+            sdbus::registerMethod("NotifyKeyboardKeycode").implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, int32_t i1, uint32_t u1) {
+                onNotifyKeyboardKeycode(o, m, i1, u1);
+            }),
+            sdbus::registerMethod("NotifyKeyboardKeysym").implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m, int32_t i1, uint32_t u1) {
+                onNotifyKeyboardKeysym(o, m, i1, u1);
+            }),
+            sdbus::registerProperty("AvailableDeviceTypes").withGetter([this]() { return availableDeviceTypes(); }),
+            sdbus::registerProperty("version").withGetter([this]() { return version(); }))
         .forInterface(INTERFACE_NAME);
 
     Debug::log(LOG, "[remotedesktop] registered");
@@ -176,7 +241,10 @@ dbUasv CRemoteDesktopPortal::onSelectDevices(sdbus::ObjectPath requestHandle, sd
         if (k == "types") {
             PSESSION->deviceTypes = v.get<uint32_t>();
             Debug::log(LOG, "[remotedesktop] devices selected: {}", PSESSION->deviceTypes);
-        }
+        } else if (k == "persist_mode")
+            PSESSION->persistMode = v.get<uint32_t>();
+        else if (k == "restore_data")
+            PSESSION->restoredGrant = parseRestoreData(v);
     }
 
     if (PSESSION->deviceTypes == 0) {
@@ -187,26 +255,65 @@ dbUasv CRemoteDesktopPortal::onSelectDevices(sdbus::ObjectPath requestHandle, sd
     return {0, {}};
 }
 
-dbUasv CRemoteDesktopPortal::onStart(sdbus::ObjectPath requestHandle, sdbus::ObjectPath sessionHandle, std::string appID, std::string parentWindow,
-                                     std::unordered_map<std::string, sdbus::Variant> opts) {
+void CRemoteDesktopPortal::onStart(StartResult&& result, sdbus::ObjectPath requestHandle, sdbus::ObjectPath sessionHandle, std::string appID, std::string parentWindow,
+                                   std::unordered_map<std::string, sdbus::Variant> opts) {
     requireFrontendCaller(*m_pObject, "Start");
 
     const auto PSESSION = getSession(sessionHandle);
 
     if (!PSESSION) {
         Debug::log(ERR, "[remotedesktop] Start: no session");
-        return {1, {}};
+        result.returnResults(1, {});
+        return;
     }
 
     if (PSESSION->started) {
         Debug::log(WARN, "[remotedesktop] session already started");
-        return {0, {}};
+        result.returnResults(0, {});
+        return;
     }
 
+    if (opts.contains("persist_mode"))
+        PSESSION->persistMode = opts["persist_mode"].get<uint32_t>();
+
+    // A previous "always allow" covers this session only if it asks for nothing more
+    const uint32_t WANTED = PSESSION->deviceTypes | (PSESSION->clipboardRequested ? RESTORE_CLIPBOARD_BIT : 0);
+    if (PSESSION->restoredGrant && (WANTED & ~*PSESSION->restoredGrant) == 0) {
+        Debug::log(LOG, "[remotedesktop] Start: restored a previous grant, not asking");
+        finishStart(result, PSESSION, true);
+        return;
+    }
+
+    // The dialog can stay open for long: wait for it on a thread so the other
+    // sessions keep working, then finish on the main loop
+    auto pending = std::make_shared<StartResult>(std::move(result));
+    std::thread([this, pending, sessionHandle, appID, devices = PSESSION->deviceTypes, clipboard = PSESSION->clipboardRequested]() {
+        const auto CONSENT = askConsent(appID, devices, clipboard);
+        g_pPortalManager->addTimerFromThread({0, [this, pending, sessionHandle, CONSENT]() {
+                                                  const auto PSESSION = getSession(sessionHandle);
+                                                  if (!PSESSION) {
+                                                      Debug::log(LOG, "[remotedesktop] session {} closed while asking for consent", std::string{sessionHandle});
+                                                      pending->returnResults(2, {});
+                                                      return;
+                                                  }
+
+                                                  if (CONSENT == CONSENT_DENY) {
+                                                      Debug::log(LOG, "[remotedesktop] Start: denied by the user");
+                                                      pending->returnResults(1, {});
+                                                      return;
+                                                  }
+
+                                                  finishStart(*pending, PSESSION, CONSENT == CONSENT_ALWAYS);
+                                              }});
+    }).detach();
+}
+
+void CRemoteDesktopPortal::finishStart(StartResult& result, SSession* PSESSION, bool persist) {
     wl_display* display = g_pPortalManager->m_sWaylandConnection.display;
     if (!display) {
         Debug::log(ERR, "[remotedesktop] no Wayland display");
-        return {2, {}};
+        result.returnResults(2, {});
+        return;
     }
 
     // Create virtual pointer
@@ -262,11 +369,19 @@ dbUasv CRemoteDesktopPortal::onStart(sdbus::ObjectPath requestHandle, sdbus::Obj
     PSESSION->clipboardEnabled = PSESSION->clipboardRequested && g_pPortalManager->m_sHelpers.dataControl;
     Debug::log(LOG, "[remotedesktop] Start: clipboard {}", PSESSION->clipboardEnabled ? "enabled" : PSESSION->clipboardRequested ? "requested but unavailable" : "not requested");
 
+    const auto&                                     sessionHandle = PSESSION->sessionHandle;
     std::unordered_map<std::string, sdbus::Variant> results;
     // Must be a string, not ObjectPath — frontend expects GVariant string type
-    results["session_handle"] = sdbus::Variant{std::string{sessionHandle}};
-    results["devices"]        = sdbus::Variant{PSESSION->deviceTypes};
+    results["session_handle"]    = sdbus::Variant{std::string{sessionHandle}};
+    results["devices"]           = sdbus::Variant{PSESSION->deviceTypes};
     results["clipboard_enabled"] = sdbus::Variant{PSESSION->clipboardEnabled};
+
+    // The frontend keeps restore_data for the app and passes it back in SelectDevices
+    if (persist && PSESSION->persistMode > 0) {
+        const uint32_t GRANT    = PSESSION->deviceTypes | (PSESSION->clipboardEnabled ? RESTORE_CLIPBOARD_BIT : 0);
+        results["persist_mode"] = sdbus::Variant{std::min(PSESSION->persistMode, sc<uint32_t>(2))};
+        results["restore_data"] = sdbus::Variant{sdbus::Struct<std::string, uint32_t, sdbus::Variant>{RESTORE_VENDOR, RESTORE_VERSION, sdbus::Variant{GRANT}}};
+    }
 
     // Tell the new session what is on the clipboard already. Deferred so the
     // signal goes out after this reply, once the frontend knows the session started.
@@ -276,7 +391,7 @@ dbUasv CRemoteDesktopPortal::onStart(sdbus::ObjectPath requestHandle, sdbus::Obj
                                             g_pPortalManager->m_sPortals.clipboard->announceSelection({sessionHandle});
                                     }});
 
-    return {0, results};
+    result.returnResults(0, results);
 }
 
 // ─── ConnectToEIS (libei path) ───────────────────────────────────

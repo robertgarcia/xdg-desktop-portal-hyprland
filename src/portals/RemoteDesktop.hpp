@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <vector>
 #include <sdbus-c++/sdbus-c++.h>
 #include <xkbcommon/xkbcommon.h>
@@ -28,8 +29,16 @@ class CRemoteDesktopPortal {
                            std::unordered_map<std::string, sdbus::Variant> opts);
     dbUasv onSelectDevices(sdbus::ObjectPath requestHandle, sdbus::ObjectPath sessionHandle, std::string appID,
                            std::unordered_map<std::string, sdbus::Variant> opts);
-    dbUasv onStart(sdbus::ObjectPath requestHandle, sdbus::ObjectPath sessionHandle, std::string appID, std::string parentWindow,
-                   std::unordered_map<std::string, sdbus::Variant> opts);
+    using StartResult = sdbus::Result<uint32_t, std::unordered_map<std::string, sdbus::Variant>>;
+    // asynchronous: the reply is sent once the user answered the consent dialog
+    void onStart(StartResult&& result, sdbus::ObjectPath requestHandle, sdbus::ObjectPath sessionHandle, std::string appID, std::string parentWindow,
+                 std::unordered_map<std::string, sdbus::Variant> opts);
+
+    enum eConsent : uint8_t {
+        CONSENT_DENY,
+        CONSENT_ONCE,
+        CONSENT_ALWAYS,
+    };
 
     // ConnectToEIS (libei-based input path - used by KDE Connect, etc.)
     sdbus::UnixFd onConnectToEIS(sdbus::ObjectPath sessionHandle, std::string appID,
@@ -79,6 +88,11 @@ class CRemoteDesktopPortal {
         bool                          clipboardRequested = false;
         bool                          clipboardEnabled   = false;
 
+        // persistence (RemoteDesktop v2): what the app asked for, and what a previous
+        // "always allow" granted, from the restore_data the frontend passed back
+        uint32_t                persistMode = 0;
+        std::optional<uint32_t> restoredGrant;
+
         // Wayland objects (created on Start)
         SP<CCZwlrVirtualPointerV1>      virtualPointer;
         SP<CCZwpVirtualKeyboardV1>      virtualKeyboard;
@@ -99,6 +113,9 @@ class CRemoteDesktopPortal {
     };
 
     SSession* getSession(const sdbus::ObjectPath& path);
+
+    // Create the session's devices and answer Start. persist: hand out restore_data
+    void finishStart(StartResult& result, SSession* session, bool persist);
 
     // Send a key and keep the compositor's modifier state in sync with it
     void sendKey(SSession* session, uint32_t evdevKey, bool pressed, uint32_t time);

@@ -713,6 +713,12 @@ std::vector<SLogicalOutputBox> CPortalManager::getLogicalOutputBoxes() {
     return boxes;
 }
 
+void CPortalManager::addTimerFromThread(const CTimer& timer) {
+    // the timer list is otherwise only touched under this lock or from the main loop holding it
+    std::lock_guard lg(m_mEventLock);
+    addTimer(timer);
+}
+
 void CPortalManager::addTimer(const CTimer& timer) {
     Debug::log(TRACE, "[core] adding timer for {}ms", timer.duration());
     m_sTimersThread.timers.emplace_back(std::make_unique<CTimer>(timer));
