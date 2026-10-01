@@ -428,7 +428,8 @@ void CPortalManager::startEventLoop() {
                 break;
             }
 
-            for (int i = 0; i < totalNfds; ++i) {
+            // Only the core fds are fatal: an EIS client going away must not take down the whole portal
+            for (int i = 0; i < coreCount; ++i) {
                 if (!(combinedPfds[i].revents & (POLLHUP | POLLERR | POLLNVAL)))
                     continue;
 
