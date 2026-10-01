@@ -10,6 +10,7 @@
 #include "../portals/GlobalShortcuts.hpp"
 #include "../portals/InputCapture.hpp"
 #include "../portals/RemoteDesktop.hpp"
+#include "../portals/Clipboard.hpp"
 #include "../helpers/Timer.hpp"
 #include "../shared/ToplevelManager.hpp"
 #include "../shared/ToplevelMappingManager.hpp"
@@ -93,6 +94,7 @@ class CPortalManager {
         std::unique_ptr<CGlobalShortcutsPortal> globalShortcuts;
         std::unique_ptr<CInputCapturePortal>    inputCapture;
         std::unique_ptr<CRemoteDesktopPortal>   remoteDesktop;
+        std::unique_ptr<CClipboardPortal>       clipboard;
     } m_sPortals;
 
     struct {

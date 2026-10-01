@@ -371,6 +371,10 @@ void CPortalManager::init() {
         Debug::log(WARN, "RemoteDesktop not started: compositor doesn't support virtual pointer/keyboard");
     } else
         m_sPortals.remoteDesktop = std::make_unique<CRemoteDesktopPortal>(m_sWaylandConnection.virtualPointerMgr, m_sWaylandConnection.virtualKeyboardMgr);
+
+    // Clipboard only extends RemoteDesktop sessions
+    if (m_sPortals.remoteDesktop && m_sHelpers.dataControl)
+        m_sPortals.clipboard = std::make_unique<CClipboardPortal>();
     fflush(stdout);
 
     // Now that all D-Bus objects are registered, claim our service name.
@@ -585,6 +589,7 @@ void CPortalManager::startEventLoop() {
     m_sPortals.screenshot.reset();
     m_sHelpers.toplevel.reset();
     m_sPortals.inputCapture.reset();
+    m_sPortals.clipboard.reset();
     m_sPortals.remoteDesktop.reset();
     m_sHelpers.dataControl.reset();
 

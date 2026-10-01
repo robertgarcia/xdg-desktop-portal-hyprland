@@ -247,12 +247,15 @@ dbUasv CRemoteDesktopPortal::onStart(sdbus::ObjectPath requestHandle, sdbus::Obj
         }
     }
 
-    PSESSION->started = true;
+    PSESSION->started          = true;
+    PSESSION->clipboardEnabled = PSESSION->clipboardRequested && g_pPortalManager->m_sHelpers.dataControl;
+    Debug::log(LOG, "[remotedesktop] Start: clipboard {}", PSESSION->clipboardEnabled ? "enabled" : PSESSION->clipboardRequested ? "requested but unavailable" : "not requested");
 
     std::unordered_map<std::string, sdbus::Variant> results;
     // Must be a string, not ObjectPath — frontend expects GVariant string type
     results["session_handle"] = sdbus::Variant{std::string{sessionHandle}};
     results["devices"]        = sdbus::Variant{PSESSION->deviceTypes};
+    results["clipboard_enabled"] = sdbus::Variant{PSESSION->clipboardEnabled};
 
     return {0, results};
 }
@@ -686,6 +689,29 @@ uint32_t CRemoteDesktopPortal::keycodeFromKeysym(uint32_t sym, bool level0Only) 
         }
     }
     return 0;
+}
+
+// ─── Clipboard integration ───────────────────────────────────────
+
+bool CRemoteDesktopPortal::requestClipboard(const sdbus::ObjectPath& sessionHandle) {
+    const auto PSESSION = getSession(sessionHandle);
+    if (!PSESSION) {
+        Debug::log(ERR, "[remotedesktop] RequestClipboard: no session {}", std::string{sessionHandle});
+        return false;
+    }
+
+    if (PSESSION->started) {
+        Debug::log(ERR, "[remotedesktop] RequestClipboard: session {} already started", std::string{sessionHandle});
+        return false;
+    }
+
+    PSESSION->clipboardRequested = true;
+    return true;
+}
+
+bool CRemoteDesktopPortal::clipboardEnabled(const sdbus::ObjectPath& sessionHandle) {
+    const auto PSESSION = getSession(sessionHandle);
+    return PSESSION && PSESSION->clipboardEnabled;
 }
 
 // ─── Properties ──────────────────────────────────────────────────

@@ -44,6 +44,11 @@ class CRemoteDesktopPortal {
     void onNotifyKeyboardKeycode(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts, int32_t keycode, uint32_t state);
     void onNotifyKeyboardKeysym(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts, int32_t keysym, uint32_t state);
 
+    // Clipboard integration, see CClipboardPortal. Clipboard access has to be
+    // requested before the session starts and is granted by Start.
+    bool     requestClipboard(const sdbus::ObjectPath& sessionHandle);
+    bool     clipboardEnabled(const sdbus::ObjectPath& sessionHandle);
+
     // D-Bus properties
     uint32_t availableDeviceTypes();
     uint32_t version();
@@ -70,6 +75,8 @@ class CRemoteDesktopPortal {
 
         uint32_t                deviceTypes    = 0; // bitmask: 1=keyboard, 2=pointer, 4=touchscreen
         bool                    started        = false;
+        bool                    clipboardRequested = false;
+        bool                    clipboardEnabled   = false;
 
         // Wayland objects (created on Start)
         SP<CCZwlrVirtualPointerV1>      virtualPointer;
