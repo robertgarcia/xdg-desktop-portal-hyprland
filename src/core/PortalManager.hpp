@@ -13,6 +13,7 @@
 #include "../helpers/Timer.hpp"
 #include "../shared/ToplevelManager.hpp"
 #include "../shared/ToplevelMappingManager.hpp"
+#include "../shared/DataControl.hpp"
 #include <gbm.h>
 #include <poll.h>
 #include <xf86drm.h>
@@ -97,6 +98,7 @@ class CPortalManager {
     struct {
         std::unique_ptr<CToplevelManager>        toplevel;
         std::unique_ptr<CToplevelMappingManager> toplevelMapping;
+        std::unique_ptr<CDataControl>            dataControl;
     } m_sHelpers;
 
     struct {
@@ -110,6 +112,7 @@ class CPortalManager {
         SP<CCWlSeat>                          seat;
         SP<CCZwlrVirtualPointerManagerV1>     virtualPointerMgr;
         SP<CCZwpVirtualKeyboardManagerV1>     virtualKeyboardMgr;
+        SP<CCExtDataControlManagerV1>         dataControlMgr;
         gbm_bo*                               gbm       = nullptr;
         gbm_device*                           gbmDevice = nullptr;
         struct {

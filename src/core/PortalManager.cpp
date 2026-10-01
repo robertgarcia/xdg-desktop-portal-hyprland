@@ -121,6 +121,11 @@ void CPortalManager::onGlobal(uint32_t name, const char* interface, uint32_t ver
             (wl_proxy*)wl_registry_bind((wl_registry*)m_sWaylandConnection.registry->resource(), name, &zwlr_virtual_pointer_manager_v1_interface, version));
     }
 
+    else if (INTERFACE == ext_data_control_manager_v1_interface.name) {
+        m_sWaylandConnection.dataControlMgr = makeShared<CCExtDataControlManagerV1>(
+            (wl_proxy*)wl_registry_bind((wl_registry*)m_sWaylandConnection.registry->resource(), name, &ext_data_control_manager_v1_interface, 1));
+    }
+
     else if (INTERFACE == zwp_virtual_keyboard_manager_v1_interface.name) {
         m_sWaylandConnection.virtualKeyboardMgr = makeShared<CCZwpVirtualKeyboardManagerV1>(
             (wl_proxy*)wl_registry_bind((wl_registry*)m_sWaylandConnection.registry->resource(), name, &zwp_virtual_keyboard_manager_v1_interface, version));
@@ -352,6 +357,12 @@ void CPortalManager::init() {
             Debug::log(INFO, "hyprpicker not found. We suggest to use hyprpicker for color picking to be less meh.");
     }
 
+    // The clipboard helper needs the seat, which is only known after the roundtrips above
+    if (!m_sWaylandConnection.dataControlMgr || !m_sWaylandConnection.seat)
+        Debug::log(WARN, "Clipboard not available: compositor doesn't support ext_data_control_manager_v1");
+    else
+        m_sHelpers.dataControl = std::make_unique<CDataControl>(m_sWaylandConnection.dataControlMgr, m_sWaylandConnection.seat);
+
     // Initialize RemoteDesktop portal if protocols are available
     
     Debug::log(LOG, "[core] init check: vp={}, vk={}, pw={}", !!m_sWaylandConnection.virtualPointerMgr, !!m_sWaylandConnection.virtualKeyboardMgr, !!m_sPipewire.loop);
@@ -575,6 +586,7 @@ void CPortalManager::startEventLoop() {
     m_sHelpers.toplevel.reset();
     m_sPortals.inputCapture.reset();
     m_sPortals.remoteDesktop.reset();
+    m_sHelpers.dataControl.reset();
 
     m_pConnection.reset();
     pw_loop_destroy(m_sPipewire.loop);
