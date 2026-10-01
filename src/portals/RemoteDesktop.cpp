@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <climits>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <libeis.h>
@@ -13,6 +14,35 @@
 // Helper: get current time in ms for Wayland events
 static uint32_t currentTimeMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// Serialize a keymap into a memfd. The size includes the terminating NUL,
+// which keymap consumers expect. Returns -1 on failure, the caller owns the fd.
+static int keymapToFd(xkb_keymap* keymap, size_t& size) {
+    if (!keymap)
+        return -1;
+
+    char* str = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
+    if (!str)
+        return -1;
+
+    size        = strlen(str) + 1;
+    const int FD = memfd_create("xdph-keymap", MFD_CLOEXEC);
+    bool      ok = FD >= 0;
+    for (size_t written = 0; ok && written < size;) {
+        const auto N = write(FD, str + written, size - written);
+        ok           = N > 0;
+        written += N > 0 ? N : 0;
+    }
+    free(str);
+
+    if (!ok) {
+        if (FD >= 0)
+            close(FD);
+        return -1;
+    }
+
+    return FD;
 }
 
 // ─── CRemoteDesktopPortal implementation ─────────────────────────
@@ -200,28 +230,13 @@ dbUasv CRemoteDesktopPortal::onStart(sdbus::ObjectPath requestHandle, sdbus::Obj
                 // Send a keymap to the compositor. Required before any key events,
                 // otherwise the compositor sends a protocol error:
                 //   "Key event received before a keymap was set"
-                auto* ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-                if (ctx) {
-                    auto* km = xkb_keymap_new_from_names(ctx, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
-                    if (km) {
-                        char* kmStr = xkb_keymap_get_as_string(km, XKB_KEYMAP_FORMAT_TEXT_V1);
-                        if (kmStr) {
-                            char tmpName[] = "/tmp/xdph-kb-XXXXXX";
-                            int kfd = mkstemp(tmpName);
-                            if (kfd >= 0) {
-                                size_t sz = strlen(kmStr);
-                                write(kfd, kmStr, sz);
-                                lseek(kfd, 0, SEEK_SET);
-                                PSESSION->virtualKeyboard->sendKeymap(1 /* WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 */, kfd, sz);
-                                close(kfd);
-                                unlink(tmpName);
-                            }
-                            free(kmStr);
-                        }
-                        xkb_keymap_unref(km);
-                    }
-                    xkb_context_unref(ctx);
-                }
+                size_t    kmSize = 0;
+                const int KMFD   = keymapToFd(m_xkbKeymap, kmSize);
+                if (KMFD >= 0) {
+                    PSESSION->virtualKeyboard->sendKeymap(1 /* WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 */, KMFD, kmSize);
+                    close(KMFD);
+                } else
+                    Debug::log(ERR, "[remotedesktop] could not build a keymap for the virtual keyboard");
 
                 if (m_xkbKeymap)
                     PSESSION->xkbState = xkb_state_new(m_xkbKeymap);
@@ -485,35 +500,18 @@ void CRemoteDesktopPortal::processEISEvents() {
                         // Provide an XKB keymap so the EIS client can process keyboard events.
                         // Without this, ei_device_keyboard_get_keymap() returns NULL on the client,
                         // causing a crash.
-                        {
-                            auto* ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-                            if (ctx) {
-                                auto* km = xkb_keymap_new_from_names(ctx, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
-                                if (km) {
-                                    char* kmStr = xkb_keymap_get_as_string(km, XKB_KEYMAP_FORMAT_TEXT_V1);
-                                    if (kmStr) {
-                                        char tmpName[] = "/tmp/xdph-kb-XXXXXX";
-                                        int kfd = mkstemp(tmpName);
-                                        if (kfd >= 0) {
-                                            size_t sz = strlen(kmStr);
-                                            write(kfd, kmStr, sz);
-                                            lseek(kfd, 0, SEEK_SET);
-                                            // Use the libeis API: create keymap, add to device, release our ref
-                                            auto* eisKm = eis_device_new_keymap(dev, EIS_KEYMAP_TYPE_XKB, kfd, sz);
-                                            if (eisKm) {
-                                                eis_keymap_add(eisKm);
-                                                eis_keymap_unref(eisKm);
-                                            }
-                                            close(kfd);
-                                            unlink(tmpName);
-                                        }
-                                        free(kmStr);
-                                    }
-                                    xkb_keymap_unref(km);
-                                }
-                                xkb_context_unref(ctx);
+                        // Same keymap as the virtual keyboard, so the keycodes the client
+                        // picks are the ones the compositor interprets.
+                        size_t    kmSize = 0;
+                        const int KMFD   = keymapToFd(m_xkbKeymap, kmSize);
+                        if (KMFD >= 0) {
+                            if (auto* eisKm = eis_device_new_keymap(dev, EIS_KEYMAP_TYPE_XKB, KMFD, kmSize)) {
+                                eis_keymap_add(eisKm);
+                                eis_keymap_unref(eisKm);
                             }
-                        }
+                            close(KMFD);
+                        } else
+                            Debug::log(ERR, "[remotedesktop] could not build a keymap for the EIS keyboard");
                         eis_device_add(dev);
                         eis_device_resume(dev);
                         Debug::log(LOG, "[remotedesktop] EIS keyboard device added & resumed");
