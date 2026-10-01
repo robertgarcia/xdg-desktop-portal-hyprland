@@ -46,6 +46,8 @@ static int keymapToFd(xkb_keymap* keymap, size_t& size) {
     return FD;
 }
 
+static const sdbus::Error::Name PORTAL_ERROR_FAILED = sdbus::Error::Name{"org.freedesktop.portal.Error.Failed"};
+
 // ─── CRemoteDesktopPortal implementation ─────────────────────────
 
 CRemoteDesktopPortal::CRemoteDesktopPortal(SP<CCZwlrVirtualPointerManagerV1> pointerMgr, SP<CCZwpVirtualKeyboardManagerV1> keyboardMgr) {
@@ -287,14 +289,26 @@ sdbus::UnixFd CRemoteDesktopPortal::onConnectToEIS(sdbus::ObjectPath sessionHand
 
     if (!PSESSION) {
         Debug::log(ERR, "[remotedesktop] ConnectToEIS: no session for {}", std::string(sessionHandle));
-        return sdbus::UnixFd{-1};
+        throw sdbus::Error{PORTAL_ERROR_FAILED, "No such session"};
+    }
+
+    if (!PSESSION->started) {
+        Debug::log(ERR, "[remotedesktop] ConnectToEIS: session {} not started", std::string(sessionHandle));
+        throw sdbus::Error{PORTAL_ERROR_FAILED, "ConnectToEIS is only allowed after Start"};
+    }
+
+    // One EIS connection per session: replacing it would orphan the previous context,
+    // whose fd would stay in the poll set undrained and keep waking the loop
+    if (PSESSION->eis) {
+        Debug::log(ERR, "[remotedesktop] ConnectToEIS: session {} already connected", std::string(sessionHandle));
+        throw sdbus::Error{PORTAL_ERROR_FAILED, "This session is already connected to EIS"};
     }
 
     // Create EIS context
     PSESSION->eis = eis_new(this);
     if (!PSESSION->eis) {
         Debug::log(ERR, "[remotedesktop] failed to create EIS context");
-        return sdbus::UnixFd{-1};
+        throw sdbus::Error{PORTAL_ERROR_FAILED, "Could not set up the EIS connection"};
     }
 
     eis_set_user_data(PSESSION->eis, this);
@@ -304,7 +318,7 @@ sdbus::UnixFd CRemoteDesktopPortal::onConnectToEIS(sdbus::ObjectPath sessionHand
         Debug::log(ERR, "[remotedesktop] eis_setup_backend_fd failed");
         eis_unref(PSESSION->eis);
         PSESSION->eis = nullptr;
-        return sdbus::UnixFd{-1};
+        throw sdbus::Error{PORTAL_ERROR_FAILED, "Could not set up the EIS connection"};
     }
 
     // Get client fd to pass to caller
@@ -313,7 +327,7 @@ sdbus::UnixFd CRemoteDesktopPortal::onConnectToEIS(sdbus::ObjectPath sessionHand
         Debug::log(ERR, "[remotedesktop] eis_backend_fd_add_client failed");
         eis_unref(PSESSION->eis);
         PSESSION->eis = nullptr;
-        return sdbus::UnixFd{-1};
+        throw sdbus::Error{PORTAL_ERROR_FAILED, "Could not set up the EIS connection"};
     }
 
     // Get the EIS fd to poll for events
