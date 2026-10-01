@@ -12,17 +12,15 @@ CClipboardPortal::CClipboardPortal() {
     m_pObject = sdbus::createObject(*g_pPortalManager->getConnection(), OBJECT_PATH);
 
     m_pObject
-        ->addVTable(sdbus::registerMethod("RequestClipboard")
-                        .implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m) { onRequestClipboard(o, m); }),
-                    sdbus::registerMethod("SetSelection")
-                        .implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m) { onSetSelection(o, m); }),
-                    sdbus::registerMethod("SelectionWrite").implementedAs([this](sdbus::ObjectPath o, uint32_t serial) { return onSelectionWrite(o, serial); }),
-                    sdbus::registerMethod("SelectionWriteDone")
-                        .implementedAs([this](sdbus::ObjectPath o, uint32_t serial, bool success) { onSelectionWriteDone(o, serial, success); }),
-                    sdbus::registerMethod("SelectionRead").implementedAs([this](sdbus::ObjectPath o, std::string mime) { return onSelectionRead(o, mime); }),
-                    sdbus::registerSignal("SelectionOwnerChanged").withParameters<sdbus::ObjectPath, std::unordered_map<std::string, sdbus::Variant>>(),
-                    sdbus::registerSignal("SelectionTransfer").withParameters<sdbus::ObjectPath, std::string, uint32_t>(),
-                    sdbus::registerProperty("version").withGetter([] { return sc<uint32_t>(1); }))
+        ->addVTable(
+            sdbus::registerMethod("RequestClipboard").implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m) { onRequestClipboard(o, m); }),
+            sdbus::registerMethod("SetSelection").implementedAs([this](sdbus::ObjectPath o, std::unordered_map<std::string, sdbus::Variant> m) { onSetSelection(o, m); }),
+            sdbus::registerMethod("SelectionWrite").implementedAs([this](sdbus::ObjectPath o, uint32_t serial) { return onSelectionWrite(o, serial); }),
+            sdbus::registerMethod("SelectionWriteDone").implementedAs([this](sdbus::ObjectPath o, uint32_t serial, bool success) { onSelectionWriteDone(o, serial, success); }),
+            sdbus::registerMethod("SelectionRead").implementedAs([this](sdbus::ObjectPath o, std::string mime) { return onSelectionRead(o, mime); }),
+            sdbus::registerSignal("SelectionOwnerChanged").withParameters<sdbus::ObjectPath, std::unordered_map<std::string, sdbus::Variant>>(),
+            sdbus::registerSignal("SelectionTransfer").withParameters<sdbus::ObjectPath, std::string, uint32_t>(),
+            sdbus::registerProperty("version").withGetter([] { return sc<uint32_t>(1); }))
         .forInterface(INTERFACE_NAME);
 
     // the clipboard changed: let every session with clipboard access know
@@ -103,8 +101,7 @@ void CClipboardPortal::onSetSelection(sdbus::ObjectPath sessionHandle, std::unor
         return;
     }
 
-    if (!g_pPortalManager->m_sHelpers.dataControl->setSelection(mimeTypes,
-                                                                [this, sessionHandle](const std::string& mime, int fd) { startTransfer(sessionHandle, mime, fd); }))
+    if (!g_pPortalManager->m_sHelpers.dataControl->setSelection(mimeTypes, [this, sessionHandle](const std::string& mime, int fd) { startTransfer(sessionHandle, mime, fd); }))
         throw sdbus::Error{PORTAL_ERROR_FAILED, "The clipboard is not available"};
 
     m_owner = sessionHandle;

@@ -46,8 +46,8 @@ class CRemoteDesktopPortal {
 
     // Clipboard integration, see CClipboardPortal. Clipboard access has to be
     // requested before the session starts and is granted by Start.
-    bool     requestClipboard(const sdbus::ObjectPath& sessionHandle);
-    bool     clipboardEnabled(const sdbus::ObjectPath& sessionHandle);
+    bool                           requestClipboard(const sdbus::ObjectPath& sessionHandle);
+    bool                           clipboardEnabled(const sdbus::ObjectPath& sessionHandle);
     std::vector<sdbus::ObjectPath> clipboardSessions();
 
     // D-Bus properties
@@ -76,15 +76,15 @@ class CRemoteDesktopPortal {
 
         uint32_t                deviceTypes    = 0; // bitmask: 1=keyboard, 2=pointer, 4=touchscreen
         bool                    started        = false;
-        bool                    clipboardRequested = false;
-        bool                    clipboardEnabled   = false;
+        bool                          clipboardRequested = false;
+        bool                          clipboardEnabled   = false;
 
         // Wayland objects (created on Start)
         SP<CCZwlrVirtualPointerV1>      virtualPointer;
         SP<CCZwpVirtualKeyboardV1>      virtualKeyboard;
 
         // Modifier tracking, built from the same keymap the virtual keyboard uses
-        struct xkb_state*               xkbState     = nullptr;
+        struct xkb_state* xkbState = nullptr;
 
         // EIS/libei state (created by ConnectToEIS)
         struct eis*                     eis          = nullptr;
@@ -94,17 +94,17 @@ class CRemoteDesktopPortal {
         // Size of the layout bounding box the EIS regions were announced in. EIS
         // offsets are unsigned, so regions are shifted to start at 0,0 and absolute
         // events arrive already relative to the box.
-        uint32_t                        eisExtentW   = 0;
-        uint32_t                        eisExtentH   = 0;
+        uint32_t eisExtentW = 0;
+        uint32_t eisExtentH = 0;
     };
 
     SSession* getSession(const sdbus::ObjectPath& path);
 
     // Send a key and keep the compositor's modifier state in sync with it
-    void      sendKey(SSession* session, uint32_t evdevKey, bool pressed, uint32_t time);
+    void sendKey(SSession* session, uint32_t evdevKey, bool pressed, uint32_t time);
 
     // Announce one EIS region per output, shifted so the layout box starts at 0,0
-    void      addLayoutRegions(eis_device* dev, SSession* session);
+    void addLayoutRegions(eis_device* dev, SSession* session);
 
     // Keysym → keycode conversion (via xkbcommon)
     uint32_t keycodeFromKeysym(uint32_t sym, bool level0Only = false);

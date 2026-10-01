@@ -26,7 +26,7 @@ static int keymapToFd(xkb_keymap* keymap, size_t& size) {
     if (!str)
         return -1;
 
-    size        = strlen(str) + 1;
+    size         = strlen(str) + 1;
     const int FD = memfd_create("xdph-keymap", MFD_CLOEXEC);
     bool      ok = FD >= 0;
     for (size_t written = 0; ok && written < size;) {
@@ -403,8 +403,6 @@ void CRemoteDesktopPortal::onNotifyKeyboardKeycode(sdbus::ObjectPath sessionHand
     if (!PSESSION || !PSESSION->virtualKeyboard)
         return;
 
-    
-
     sendKey(PSESSION, keycode, state == 1, currentTimeMs());
     wl_display_flush(g_pPortalManager->m_sWaylandConnection.display);
 }
@@ -669,8 +667,7 @@ void CRemoteDesktopPortal::sendKey(SSession* session, uint32_t evdevKey, bool pr
         return;
 
     session->virtualKeyboard->sendModifiers(xkb_state_serialize_mods(session->xkbState, XKB_STATE_MODS_DEPRESSED),
-                                            xkb_state_serialize_mods(session->xkbState, XKB_STATE_MODS_LATCHED),
-                                            xkb_state_serialize_mods(session->xkbState, XKB_STATE_MODS_LOCKED),
+                                            xkb_state_serialize_mods(session->xkbState, XKB_STATE_MODS_LATCHED), xkb_state_serialize_mods(session->xkbState, XKB_STATE_MODS_LOCKED),
                                             xkb_state_serialize_layout(session->xkbState, XKB_STATE_LAYOUT_EFFECTIVE));
 }
 

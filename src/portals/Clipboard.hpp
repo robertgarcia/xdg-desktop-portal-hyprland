@@ -21,14 +21,14 @@ class CClipboardPortal {
     sdbus::UnixFd onSelectionRead(sdbus::ObjectPath sessionHandle, std::string mimeType);
 
     // Send SelectionOwnerChanged with the current clipboard content to the given sessions
-    void          announceSelection(const std::vector<sdbus::ObjectPath>& sessions);
+    void announceSelection(const std::vector<sdbus::ObjectPath>& sessions);
 
     // A RemoteDesktop session went away: drop what it owned
-    void          sessionClosed(const sdbus::ObjectPath& sessionHandle);
+    void sessionClosed(const sdbus::ObjectPath& sessionHandle);
 
   private:
     // throws a portal error unless the session exists, was started and has the clipboard
-    void                           requireClipboard(const sdbus::ObjectPath& sessionHandle, const char* method);
+    void requireClipboard(const sdbus::ObjectPath& sessionHandle, const char* method);
 
     // An app is pasting content a session owns: the app reads from fd until the
     // session writes it through SelectionWrite and closes it.
@@ -50,6 +50,6 @@ class CClipboardPortal {
     std::vector<STransfer>           m_transfers;
     uint32_t                         m_nextSerial = 1;
 
-    const sdbus::InterfaceName      INTERFACE_NAME = sdbus::InterfaceName{"org.freedesktop.impl.portal.Clipboard"};
-    const sdbus::ObjectPath         OBJECT_PATH    = sdbus::ObjectPath{"/org/freedesktop/portal/desktop"};
+    const sdbus::InterfaceName       INTERFACE_NAME = sdbus::InterfaceName{"org.freedesktop.impl.portal.Clipboard"};
+    const sdbus::ObjectPath          OBJECT_PATH    = sdbus::ObjectPath{"/org/freedesktop/portal/desktop"};
 };
