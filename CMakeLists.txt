@@ -58,7 +58,7 @@ pkg_check_modules(
   REQUIRED
   IMPORTED_TARGET
   wayland-client
-  wayland-protocols
+  wayland-protocols>=1.39
   libpipewire-0.3>=1.1.82
   libspa-0.2
   libdrm

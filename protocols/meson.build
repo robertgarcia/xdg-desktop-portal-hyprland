@@ -1,5 +1,5 @@
 wayland_protos = dependency('wayland-protocols',
-	version: '>=1.31',
+	version: '>=1.39', # staging/ext-data-control
 	default_options: ['tests=false'],
 )
 
@@ -20,6 +20,8 @@ hyprwayland_scanner = find_program(
 client_protocols = [
 	'wlr-screencopy-unstable-v1.xml',
 	'wlr-foreign-toplevel-management-unstable-v1.xml',
+	'wlr-virtual-pointer-unstable-v1.xml',
+	'virtual-keyboard-unstable-v1.xml',
 	hl_protocol_dir / 'protocols/hyprland-toplevel-export-v1.xml',
 	hl_protocol_dir / 'protocols/hyprland-toplevel-mapping-v1.xml',
 	hl_protocol_dir / 'protocols/hyprland-global-shortcuts-v1.xml',
@@ -27,6 +29,7 @@ client_protocols = [
 	wl_protocol_dir / 'stable/linux-dmabuf/linux-dmabuf-v1.xml',
 	wl_protocol_dir / 'unstable/xdg-output/xdg-output-unstable-v1.xml',
 	wl_protocol_dir / 'staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1.xml',
+	wl_protocol_dir / 'staging/ext-data-control/ext-data-control-v1.xml',
 ]
 
 wl_proto_files = []
