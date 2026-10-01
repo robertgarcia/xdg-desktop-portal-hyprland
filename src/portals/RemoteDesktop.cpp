@@ -96,14 +96,15 @@ CRemoteDesktopPortal::CRemoteDesktopPortal(SP<CCZwlrVirtualPointerManagerV1> poi
 CRemoteDesktopPortal::SSession::~SSession() {
     if (eisFd >= 0)
         g_pPortalManager->removeExtraPollFd(eisFd);
-    if (eis) {
+    // eisFd is owned by the eis context (eis_get_fd), eis_unref closes it
+    if (eis)
         eis_unref(eis);
-        eis = nullptr;
-    }
-    if (eisFd >= 0) {
-        close(eisFd);
-        eisFd = -1;
-    }
+
+    // the generated destructors send destroy for the virtual devices
+    virtualPointer.reset();
+    virtualKeyboard.reset();
+    if (g_pPortalManager->m_sWaylandConnection.display)
+        wl_display_flush(g_pPortalManager->m_sWaylandConnection.display);
 }
 
 dbUasv CRemoteDesktopPortal::onCreateSession(sdbus::ObjectPath requestHandle, sdbus::ObjectPath sessionHandle, std::string appID,
@@ -113,7 +114,13 @@ dbUasv CRemoteDesktopPortal::onCreateSession(sdbus::ObjectPath requestHandle, sd
     const auto PSESSION = m_vSessions.emplace_back(std::make_unique<SSession>(appID, requestHandle, sessionHandle)).get();
 
     PSESSION->session            = createDBusSession(sessionHandle);
-    PSESSION->session->onDestroy = [PSESSION]() { PSESSION->session.release(); };
+    PSESSION->session->onDestroy = [PSESSION, this]() {
+        // the SDBusSession is leaked on purpose like in the other portals, its object is already gone
+        PSESSION->session.release();
+        Debug::log(LOG, "[remotedesktop] Session {} closed", std::string{PSESSION->sessionHandle});
+        // runs from a core timer on the main loop, never from inside processEISEvents
+        std::erase_if(m_vSessions, [PSESSION](const auto& s) { return s.get() == PSESSION; });
+    };
     PSESSION->request            = createDBusRequest(requestHandle);
     PSESSION->request->onDestroy = [PSESSION]() { PSESSION->request.release(); };
 
