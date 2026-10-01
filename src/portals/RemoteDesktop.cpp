@@ -305,7 +305,9 @@ sdbus::UnixFd CRemoteDesktopPortal::onConnectToEIS(sdbus::ObjectPath sessionHand
     // Register the EIS fd with PortalManager's poll loop
     g_pPortalManager->addExtraPollFd(PSESSION->eisFd);
 
-    return sdbus::UnixFd{clientFd};
+    // adopt: the plain constructor dups the fd and would keep the client end open here,
+    // so libeis could never see the client go away
+    return sdbus::UnixFd{clientFd, sdbus::adopt_fd};
 }
 
 // ─── Input notification handlers ─────────────────────────────────
