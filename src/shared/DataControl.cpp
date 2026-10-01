@@ -1,7 +1,10 @@
 #include "DataControl.hpp"
 #include "../helpers/Log.hpp"
+#include "../core/PortalManager.hpp"
 
 #include <algorithm>
+#include <fcntl.h>
+#include <unistd.h>
 
 static std::string joinMimeTypes(const std::vector<std::string>& mimeTypes) {
     std::string joined;
@@ -54,6 +57,27 @@ CDataControl::CDataControl(SP<CCExtDataControlManagerV1> manager, SP<CCWlSeat> s
 
 const std::vector<std::string>& CDataControl::selectionMimeTypes() const {
     return m_selection ? m_selection->mimeTypes : m_noMimeTypes;
+}
+
+int CDataControl::receive(const std::string& mimeType) {
+    if (!m_selection || !std::ranges::contains(m_selection->mimeTypes, mimeType)) {
+        Debug::log(WARN, "[datacontrol] receive: clipboard has no {} content", mimeType);
+        return -1;
+    }
+
+    int fds[2] = {-1, -1};
+    if (pipe2(fds, O_CLOEXEC) != 0) {
+        Debug::log(ERR, "[datacontrol] receive: pipe2 failed: {}", strerror(errno));
+        return -1;
+    }
+
+    // libwayland dups the fd while marshalling, so our write end can be closed right away.
+    // Flushing matters: the owner only starts writing once it gets the request.
+    m_selection->offer->sendReceive(mimeType.c_str(), fds[1]);
+    wl_display_flush(g_pPortalManager->m_sWaylandConnection.display);
+    close(fds[1]);
+
+    return fds[0];
 }
 
 SP<CDataControl::SOffer> CDataControl::offerFor(wl_proxy* proxy) {

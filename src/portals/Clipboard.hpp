@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 #include <sdbus-c++/sdbus-c++.h>
 
 #include "../dbusDefines.hpp"
@@ -10,12 +11,16 @@
 class CClipboardPortal {
   public:
     CClipboardPortal();
+    ~CClipboardPortal();
 
     void          onRequestClipboard(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts);
     void          onSetSelection(sdbus::ObjectPath sessionHandle, std::unordered_map<std::string, sdbus::Variant> opts);
     sdbus::UnixFd onSelectionWrite(sdbus::ObjectPath sessionHandle, uint32_t serial);
     void          onSelectionWriteDone(sdbus::ObjectPath sessionHandle, uint32_t serial, bool success);
     sdbus::UnixFd onSelectionRead(sdbus::ObjectPath sessionHandle, std::string mimeType);
+
+    // Send SelectionOwnerChanged with the current clipboard content to the given sessions
+    void          announceSelection(const std::vector<sdbus::ObjectPath>& sessions);
 
   private:
     // throws a portal error unless the session exists, was started and has the clipboard

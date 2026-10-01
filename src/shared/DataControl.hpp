@@ -17,6 +17,11 @@ class CDataControl {
     // Mime types of the current clipboard selection, empty when the clipboard is empty
     const std::vector<std::string>&                       selectionMimeTypes() const;
 
+    // Ask the clipboard owner to write the selection as mimeType. Returns the read end
+    // of a pipe the owner writes into, or -1 if the clipboard has no such type. The
+    // caller owns the fd.
+    int                                                   receive(const std::string& mimeType);
+
     // Fired on every clipboard selection change, with the new mime types (empty = cleared)
     std::function<void(const std::vector<std::string>&)> onSelectionChanged;
 

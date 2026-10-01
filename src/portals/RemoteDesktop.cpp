@@ -257,6 +257,14 @@ dbUasv CRemoteDesktopPortal::onStart(sdbus::ObjectPath requestHandle, sdbus::Obj
     results["devices"]        = sdbus::Variant{PSESSION->deviceTypes};
     results["clipboard_enabled"] = sdbus::Variant{PSESSION->clipboardEnabled};
 
+    // Tell the new session what is on the clipboard already. Deferred so the
+    // signal goes out after this reply, once the frontend knows the session started.
+    if (PSESSION->clipboardEnabled)
+        g_pPortalManager->addTimer({0, [sessionHandle]() {
+                                        if (g_pPortalManager->m_sPortals.clipboard)
+                                            g_pPortalManager->m_sPortals.clipboard->announceSelection({sessionHandle});
+                                    }});
+
     return {0, results};
 }
 
@@ -714,6 +722,15 @@ bool CRemoteDesktopPortal::requestClipboard(const sdbus::ObjectPath& sessionHand
 bool CRemoteDesktopPortal::clipboardEnabled(const sdbus::ObjectPath& sessionHandle) {
     const auto PSESSION = getSession(sessionHandle);
     return PSESSION && PSESSION->clipboardEnabled;
+}
+
+std::vector<sdbus::ObjectPath> CRemoteDesktopPortal::clipboardSessions() {
+    std::vector<sdbus::ObjectPath> sessions;
+    for (const auto& s : m_vSessions) {
+        if (s->clipboardEnabled)
+            sessions.emplace_back(s->sessionHandle);
+    }
+    return sessions;
 }
 
 // ─── Properties ──────────────────────────────────────────────────

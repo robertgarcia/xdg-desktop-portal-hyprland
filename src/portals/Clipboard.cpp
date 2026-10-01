@@ -21,7 +21,33 @@ CClipboardPortal::CClipboardPortal() {
                     sdbus::registerProperty("version").withGetter([] { return sc<uint32_t>(1); }))
         .forInterface(INTERFACE_NAME);
 
+    // a local app took the clipboard: let every session with clipboard access know
+    g_pPortalManager->m_sHelpers.dataControl->onSelectionChanged = [this](const std::vector<std::string>& mimeTypes) {
+        if (g_pPortalManager->m_sPortals.remoteDesktop)
+            announceSelection(g_pPortalManager->m_sPortals.remoteDesktop->clipboardSessions());
+    };
+
     Debug::log(LOG, "[clipboard] registered");
+}
+
+CClipboardPortal::~CClipboardPortal() {
+    // the helper outlives us during shutdown, don't leave it calling into a dead portal
+    if (g_pPortalManager->m_sHelpers.dataControl)
+        g_pPortalManager->m_sHelpers.dataControl->onSelectionChanged = nullptr;
+}
+
+void CClipboardPortal::announceSelection(const std::vector<sdbus::ObjectPath>& sessions) {
+    const auto& MIMETYPES = g_pPortalManager->m_sHelpers.dataControl->selectionMimeTypes();
+
+    std::unordered_map<std::string, sdbus::Variant> options;
+    options["mime_types"]       = sdbus::Variant{MIMETYPES};
+    // TODO phase 4: true for the session whose SetSelection put the content there
+    options["session_is_owner"] = sdbus::Variant{false};
+
+    for (const auto& session : sessions) {
+        Debug::log(LOG, "[clipboard] SelectionOwnerChanged -> {} ({} mime types)", std::string{session}, MIMETYPES.size());
+        m_pObject->emitSignal("SelectionOwnerChanged").onInterface(INTERFACE_NAME).withArguments(session, options);
+    }
 }
 
 void CClipboardPortal::requireClipboard(const sdbus::ObjectPath& sessionHandle, const char* method) {
@@ -71,7 +97,11 @@ void CClipboardPortal::onSelectionWriteDone(sdbus::ObjectPath sessionHandle, uin
 
 sdbus::UnixFd CClipboardPortal::onSelectionRead(sdbus::ObjectPath sessionHandle, std::string mimeType) {
     requireClipboard(sessionHandle, "SelectionRead");
-    // TODO phase 3: hand out a pipe fed by the current data-control offer
-    Debug::log(LOG, "[clipboard] SelectionRead {} (not implemented yet)", mimeType);
-    throw sdbus::Error{PORTAL_ERROR_FAILED, "SelectionRead is not implemented yet"};
+
+    const int FD = g_pPortalManager->m_sHelpers.dataControl->receive(mimeType);
+    if (FD < 0)
+        throw sdbus::Error{PORTAL_ERROR_FAILED, "The clipboard has no content of the requested type"};
+
+    Debug::log(LOG, "[clipboard] SelectionRead {} for {}", mimeType, std::string{sessionHandle});
+    return sdbus::UnixFd{FD, sdbus::adopt_fd};
 }

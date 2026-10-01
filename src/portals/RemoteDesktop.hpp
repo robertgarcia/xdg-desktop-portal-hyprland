@@ -48,6 +48,7 @@ class CRemoteDesktopPortal {
     // requested before the session starts and is granted by Start.
     bool     requestClipboard(const sdbus::ObjectPath& sessionHandle);
     bool     clipboardEnabled(const sdbus::ObjectPath& sessionHandle);
+    std::vector<sdbus::ObjectPath> clipboardSessions();
 
     // D-Bus properties
     uint32_t availableDeviceTypes();
