@@ -103,9 +103,11 @@ void CClipboardPortal::onSetSelection(sdbus::ObjectPath sessionHandle, std::unor
         return;
     }
 
+    if (!g_pPortalManager->m_sHelpers.dataControl->setSelection(mimeTypes,
+                                                                [this, sessionHandle](const std::string& mime, int fd) { startTransfer(sessionHandle, mime, fd); }))
+        throw sdbus::Error{PORTAL_ERROR_FAILED, "The clipboard is not available"};
+
     m_owner = sessionHandle;
-    g_pPortalManager->m_sHelpers.dataControl->setSelection(mimeTypes,
-                                                           [this, sessionHandle](const std::string& mime, int fd) { startTransfer(sessionHandle, mime, fd); });
 }
 
 void CClipboardPortal::startTransfer(const sdbus::ObjectPath& sessionHandle, const std::string& mimeType, int fd) {
@@ -178,6 +180,11 @@ void CClipboardPortal::sessionClosed(const sdbus::ObjectPath& sessionHandle) {
 
 sdbus::UnixFd CClipboardPortal::onSelectionRead(sdbus::ObjectPath sessionHandle, std::string mimeType) {
     requireClipboard(sessionHandle, "SelectionRead");
+
+    // Reading our own source would ask this very session for the data while it waits
+    // on the read, stalling it until the transfer times out
+    if (m_owner == sessionHandle && g_pPortalManager->m_sHelpers.dataControl->ownsSelection())
+        throw sdbus::Error{PORTAL_ERROR_FAILED, "The session already owns the clipboard content"};
 
     const int FD = g_pPortalManager->m_sHelpers.dataControl->receive(mimeType);
     if (FD < 0)

@@ -6,6 +6,12 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+static bool sameMimeTypes(std::vector<std::string> a, std::vector<std::string> b) {
+    std::ranges::sort(a);
+    std::ranges::sort(b);
+    return a == b;
+}
+
 static std::string joinMimeTypes(const std::vector<std::string>& mimeTypes) {
     std::string joined;
     for (const auto& m : mimeTypes) {
@@ -38,9 +44,10 @@ CDataControl::CDataControl(SP<CCExtDataControlManagerV1> manager, SP<CCWlSeat> s
         // the previous selection offer is no longer valid, dropping it destroys it
         m_selection = proxy ? offerFor(proxy) : nullptr;
 
-        const bool OWN = m_pendingOwnSelections > 0;
+        const bool OWN = m_pendingOwnSelections > 0 && m_source && m_selection && sameMimeTypes(m_selection->mimeTypes, m_sourceMimeTypes);
         if (OWN)
             m_pendingOwnSelections--;
+        m_selectionIsOwn = OWN;
 
         Debug::log(LOG, "[datacontrol] clipboard selection changed ({}), mime types: [{}]", OWN ? "ours" : "other client", joinMimeTypes(selectionMimeTypes()));
 
@@ -84,9 +91,9 @@ int CDataControl::receive(const std::string& mimeType) {
     return fds[0];
 }
 
-void CDataControl::setSelection(const std::vector<std::string>& mimeTypes, std::function<void(const std::string&, int)> onSend) {
+bool CDataControl::setSelection(const std::vector<std::string>& mimeTypes, std::function<void(const std::string&, int)> onSend) {
     if (!m_device)
-        return;
+        return false;
 
     // replacing the source makes the compositor cancel the old one, which we ignore below
     m_source = makeShared<CCExtDataControlSourceV1>(m_manager->sendCreateDataSource());
@@ -110,14 +117,24 @@ void CDataControl::setSelection(const std::vector<std::string>& mimeTypes, std::
             onOwnSelectionLost();
     });
 
-    for (const auto& mime : mimeTypes)
+    m_sourceMimeTypes.clear();
+    for (const auto& mime : mimeTypes) {
+        if (std::ranges::contains(m_sourceMimeTypes, mime))
+            continue;
+        m_sourceMimeTypes.emplace_back(mime);
         m_source->sendOffer(mime.c_str());
+    }
 
     m_device->sendSetSelection(m_source.get());
     m_pendingOwnSelections++;
     wl_display_flush(g_pPortalManager->m_sWaylandConnection.display);
 
-    Debug::log(LOG, "[datacontrol] took the clipboard offering [{}]", joinMimeTypes(mimeTypes));
+    Debug::log(LOG, "[datacontrol] took the clipboard offering [{}]", joinMimeTypes(m_sourceMimeTypes));
+    return true;
+}
+
+bool CDataControl::ownsSelection() const {
+    return m_source && m_selectionIsOwn;
 }
 
 void CDataControl::dropOwnSelection() {
