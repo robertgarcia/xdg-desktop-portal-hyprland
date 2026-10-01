@@ -22,8 +22,19 @@ class CDataControl {
     // caller owns the fd.
     int                                                   receive(const std::string& mimeType);
 
+    // Take the clipboard with our own source offering mimeTypes. onSend(mimeType, fd) runs
+    // whenever an app pastes; it owns fd and must write the content there and close it.
+    void                                                  setSelection(const std::vector<std::string>& mimeTypes, std::function<void(const std::string&, int)> onSend);
+
+    // Give up our source, if we have one
+    void                                                  dropOwnSelection();
+
     // Fired on every clipboard selection change, with the new mime types (empty = cleared)
-    std::function<void(const std::vector<std::string>&)> onSelectionChanged;
+    // and whether the new selection is the source set with setSelection()
+    std::function<void(const std::vector<std::string>&, bool)> onSelectionChanged;
+
+    // Fired when another client takes the clipboard away from our source
+    std::function<void()>                                 onOwnSelectionLost;
 
   private:
     struct SOffer {
@@ -40,6 +51,14 @@ class CDataControl {
     // offers announced by data_offer that are not the selection (yet)
     std::vector<SP<SOffer>>          m_pendingOffers;
     SP<SOffer>                       m_selection;
+
+    SP<CCExtDataControlSourceV1>     m_source;
+    std::function<void(const std::string&, int)> m_onSend;
+
+    // selection events still to come for our own set_selection requests. The protocol
+    // does not say whose source a selection offer belongs to, but the compositor
+    // answers set_selection requests in order, so we count them.
+    int                              m_pendingOwnSelections = 0;
 
     const std::vector<std::string>   m_noMimeTypes;
 };

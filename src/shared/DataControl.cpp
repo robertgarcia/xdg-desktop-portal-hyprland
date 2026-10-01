@@ -38,10 +38,14 @@ CDataControl::CDataControl(SP<CCExtDataControlManagerV1> manager, SP<CCWlSeat> s
         // the previous selection offer is no longer valid, dropping it destroys it
         m_selection = proxy ? offerFor(proxy) : nullptr;
 
-        Debug::log(LOG, "[datacontrol] clipboard selection changed, mime types: [{}]", joinMimeTypes(selectionMimeTypes()));
+        const bool OWN = m_pendingOwnSelections > 0;
+        if (OWN)
+            m_pendingOwnSelections--;
+
+        Debug::log(LOG, "[datacontrol] clipboard selection changed ({}), mime types: [{}]", OWN ? "ours" : "other client", joinMimeTypes(selectionMimeTypes()));
 
         if (onSelectionChanged)
-            onSelectionChanged(selectionMimeTypes());
+            onSelectionChanged(selectionMimeTypes(), OWN);
     });
 
     m_device->setPrimarySelection([this](CCExtDataControlDeviceV1* r, wl_proxy* proxy) {
@@ -80,6 +84,52 @@ int CDataControl::receive(const std::string& mimeType) {
     return fds[0];
 }
 
+void CDataControl::setSelection(const std::vector<std::string>& mimeTypes, std::function<void(const std::string&, int)> onSend) {
+    if (!m_device)
+        return;
+
+    // replacing the source makes the compositor cancel the old one, which we ignore below
+    m_source = makeShared<CCExtDataControlSourceV1>(m_manager->sendCreateDataSource());
+    m_onSend = std::move(onSend);
+
+    m_source->setSend([this](CCExtDataControlSourceV1* r, const char* mime, int32_t fd) {
+        if (r != m_source.get() || !m_onSend) {
+            close(fd);
+            return;
+        }
+        m_onSend(mime, fd);
+    });
+
+    m_source->setCancelled([this](CCExtDataControlSourceV1* r) {
+        if (r != m_source.get())
+            return;
+        Debug::log(LOG, "[datacontrol] another client took the clipboard from us");
+        m_source.reset();
+        m_onSend = nullptr;
+        if (onOwnSelectionLost)
+            onOwnSelectionLost();
+    });
+
+    for (const auto& mime : mimeTypes)
+        m_source->sendOffer(mime.c_str());
+
+    m_device->sendSetSelection(m_source.get());
+    m_pendingOwnSelections++;
+    wl_display_flush(g_pPortalManager->m_sWaylandConnection.display);
+
+    Debug::log(LOG, "[datacontrol] took the clipboard offering [{}]", joinMimeTypes(mimeTypes));
+}
+
+void CDataControl::dropOwnSelection() {
+    if (!m_source)
+        return;
+
+    Debug::log(LOG, "[datacontrol] dropping our clipboard source");
+    m_source.reset();
+    m_onSend = nullptr;
+    wl_display_flush(g_pPortalManager->m_sWaylandConnection.display);
+}
+
 SP<CDataControl::SOffer> CDataControl::offerFor(wl_proxy* proxy) {
     const auto IT = std::ranges::find_if(m_pendingOffers, [proxy](const auto& o) { return o->offer->proxy() == proxy; });
     if (IT == m_pendingOffers.end()) {
@@ -99,6 +149,9 @@ void CDataControl::onDeviceFinished() {
     m_pendingOffers.clear();
     m_device.reset();
 
+    m_source.reset();
+    m_pendingOwnSelections = 0;
+
     if (onSelectionChanged)
-        onSelectionChanged(m_noMimeTypes);
+        onSelectionChanged(m_noMimeTypes, false);
 }

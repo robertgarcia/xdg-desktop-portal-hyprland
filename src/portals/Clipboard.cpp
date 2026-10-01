@@ -2,6 +2,10 @@
 #include "../core/PortalManager.hpp"
 #include "../helpers/Log.hpp"
 
+#include <algorithm>
+#include <unistd.h>
+
+constexpr int                   TRANSFER_TIMEOUT_MS = 10000;
 static const sdbus::Error::Name PORTAL_ERROR_FAILED = sdbus::Error::Name{"org.freedesktop.portal.Error.Failed"};
 
 CClipboardPortal::CClipboardPortal() {
@@ -21,10 +25,16 @@ CClipboardPortal::CClipboardPortal() {
                     sdbus::registerProperty("version").withGetter([] { return sc<uint32_t>(1); }))
         .forInterface(INTERFACE_NAME);
 
-    // a local app took the clipboard: let every session with clipboard access know
-    g_pPortalManager->m_sHelpers.dataControl->onSelectionChanged = [this](const std::vector<std::string>& mimeTypes) {
+    // the clipboard changed: let every session with clipboard access know
+    g_pPortalManager->m_sHelpers.dataControl->onSelectionChanged = [this](const std::vector<std::string>& mimeTypes, bool own) {
+        m_ownSelectionIsCurrent = own;
         if (g_pPortalManager->m_sPortals.remoteDesktop)
             announceSelection(g_pPortalManager->m_sPortals.remoteDesktop->clipboardSessions());
+    };
+
+    g_pPortalManager->m_sHelpers.dataControl->onOwnSelectionLost = [this]() {
+        m_owner.reset();
+        m_ownSelectionIsCurrent = false;
     };
 
     Debug::log(LOG, "[clipboard] registered");
@@ -32,20 +42,31 @@ CClipboardPortal::CClipboardPortal() {
 
 CClipboardPortal::~CClipboardPortal() {
     // the helper outlives us during shutdown, don't leave it calling into a dead portal
-    if (g_pPortalManager->m_sHelpers.dataControl)
+    if (g_pPortalManager->m_sHelpers.dataControl) {
         g_pPortalManager->m_sHelpers.dataControl->onSelectionChanged = nullptr;
+        g_pPortalManager->m_sHelpers.dataControl->onOwnSelectionLost = nullptr;
+        g_pPortalManager->m_sHelpers.dataControl->dropOwnSelection();
+    }
+
+    for (auto& t : m_transfers) {
+        if (t.fd >= 0)
+            close(t.fd);
+    }
 }
 
 void CClipboardPortal::announceSelection(const std::vector<sdbus::ObjectPath>& sessions) {
     const auto& MIMETYPES = g_pPortalManager->m_sHelpers.dataControl->selectionMimeTypes();
 
-    std::unordered_map<std::string, sdbus::Variant> options;
-    options["mime_types"]       = sdbus::Variant{MIMETYPES};
-    // TODO phase 4: true for the session whose SetSelection put the content there
-    options["session_is_owner"] = sdbus::Variant{false};
-
     for (const auto& session : sessions) {
-        Debug::log(LOG, "[clipboard] SelectionOwnerChanged -> {} ({} mime types)", std::string{session}, MIMETYPES.size());
+        // The owner must be told it owns the content, or it would read back what it
+        // just set and send it to the other side again
+        const bool                                      IS_OWNER = m_ownSelectionIsCurrent && m_owner == session;
+
+        std::unordered_map<std::string, sdbus::Variant> options;
+        options["mime_types"]       = sdbus::Variant{MIMETYPES};
+        options["session_is_owner"] = sdbus::Variant{IS_OWNER};
+
+        Debug::log(LOG, "[clipboard] SelectionOwnerChanged -> {} ({} mime types, owner: {})", std::string{session}, MIMETYPES.size(), IS_OWNER);
         m_pObject->emitSignal("SelectionOwnerChanged").onInterface(INTERFACE_NAME).withArguments(session, options);
     }
 }
@@ -72,27 +93,87 @@ void CClipboardPortal::onSetSelection(sdbus::ObjectPath sessionHandle, std::unor
     if (opts.contains("mime_types"))
         mimeTypes = opts["mime_types"].get<std::vector<std::string>>();
 
-    std::string joined;
-    for (const auto& m : mimeTypes) {
-        joined += joined.empty() ? "" : ", ";
-        joined += m;
+    Debug::log(LOG, "[clipboard] SetSelection from {} with {} mime types", std::string{sessionHandle}, mimeTypes.size());
+
+    if (mimeTypes.empty()) {
+        if (m_owner == sessionHandle) {
+            g_pPortalManager->m_sHelpers.dataControl->dropOwnSelection();
+            m_owner.reset();
+        }
+        return;
     }
 
-    // TODO phase 4: take the clipboard with a data-control source offering these types
-    Debug::log(LOG, "[clipboard] SetSelection from {}: [{}] (not implemented yet, ignored)", std::string{sessionHandle}, joined);
+    m_owner = sessionHandle;
+    g_pPortalManager->m_sHelpers.dataControl->setSelection(mimeTypes,
+                                                           [this, sessionHandle](const std::string& mime, int fd) { startTransfer(sessionHandle, mime, fd); });
+}
+
+void CClipboardPortal::startTransfer(const sdbus::ObjectPath& sessionHandle, const std::string& mimeType, int fd) {
+    const auto SERIAL = m_nextSerial++;
+    m_transfers.emplace_back(STransfer{.serial = SERIAL, .session = sessionHandle, .fd = fd});
+
+    Debug::log(LOG, "[clipboard] SelectionTransfer {} serial {} -> {}", mimeType, SERIAL, std::string{sessionHandle});
+    m_pObject->emitSignal("SelectionTransfer").onInterface(INTERFACE_NAME).withArguments(sessionHandle, mimeType, SERIAL);
+
+    // a pasting app blocks until its fd is closed, never leave it hanging
+    g_pPortalManager->addTimer({TRANSFER_TIMEOUT_MS, [this, SERIAL]() {
+                                    if (std::ranges::any_of(m_transfers, [SERIAL](const auto& t) { return t.serial == SERIAL; })) {
+                                        Debug::log(WARN, "[clipboard] transfer serial {} timed out", SERIAL);
+                                        endTransfer(SERIAL);
+                                    }
+                                }});
+}
+
+void CClipboardPortal::endTransfer(uint32_t serial) {
+    const auto IT = std::ranges::find_if(m_transfers, [serial](const auto& t) { return t.serial == serial; });
+    if (IT == m_transfers.end())
+        return;
+
+    if (IT->fd >= 0)
+        close(IT->fd);
+    m_transfers.erase(IT);
 }
 
 sdbus::UnixFd CClipboardPortal::onSelectionWrite(sdbus::ObjectPath sessionHandle, uint32_t serial) {
     requireClipboard(sessionHandle, "SelectionWrite");
-    // TODO phase 4
-    Debug::log(LOG, "[clipboard] SelectionWrite serial {} (not implemented yet)", serial);
-    throw sdbus::Error{PORTAL_ERROR_FAILED, "SelectionWrite is not implemented yet"};
+
+    const auto IT = std::ranges::find_if(m_transfers, [&](const auto& t) { return t.serial == serial && t.session == sessionHandle; });
+    if (IT == m_transfers.end() || IT->fd < 0) {
+        Debug::log(ERR, "[clipboard] SelectionWrite: no pending transfer with serial {}", serial);
+        throw sdbus::Error{PORTAL_ERROR_FAILED, "No pending transfer with this serial"};
+    }
+
+    // hand the fd over: the app only sees the end of the data once the writer closes it,
+    // so we must not keep a copy
+    const int FD = IT->fd;
+    IT->fd       = -1;
+
+    Debug::log(LOG, "[clipboard] SelectionWrite serial {}", serial);
+    return sdbus::UnixFd{FD, sdbus::adopt_fd};
 }
 
 void CClipboardPortal::onSelectionWriteDone(sdbus::ObjectPath sessionHandle, uint32_t serial, bool success) {
     requireClipboard(sessionHandle, "SelectionWriteDone");
-    // TODO phase 4
-    Debug::log(LOG, "[clipboard] SelectionWriteDone serial {} success {} (not implemented yet)", serial, success);
+
+    Debug::log(success ? LOG : WARN, "[clipboard] SelectionWriteDone serial {} success {}", serial, success);
+    endTransfer(serial);
+}
+
+void CClipboardPortal::sessionClosed(const sdbus::ObjectPath& sessionHandle) {
+    std::vector<uint32_t> serials;
+    for (const auto& t : m_transfers) {
+        if (t.session == sessionHandle)
+            serials.emplace_back(t.serial);
+    }
+    for (const auto SERIAL : serials)
+        endTransfer(SERIAL);
+
+    // nobody can provide the content anymore
+    if (m_owner == sessionHandle) {
+        g_pPortalManager->m_sHelpers.dataControl->dropOwnSelection();
+        m_owner.reset();
+        m_ownSelectionIsCurrent = false;
+    }
 }
 
 sdbus::UnixFd CClipboardPortal::onSelectionRead(sdbus::ObjectPath sessionHandle, std::string mimeType) {

@@ -136,6 +136,8 @@ dbUasv CRemoteDesktopPortal::onCreateSession(sdbus::ObjectPath requestHandle, sd
         // the SDBusSession is leaked on purpose like in the other portals, its object is already gone
         PSESSION->session.release();
         Debug::log(LOG, "[remotedesktop] Session {} closed", std::string{PSESSION->sessionHandle});
+        if (PSESSION->clipboardEnabled && g_pPortalManager->m_sPortals.clipboard)
+            g_pPortalManager->m_sPortals.clipboard->sessionClosed(PSESSION->sessionHandle);
         // runs from a core timer on the main loop, never from inside processEISEvents
         std::erase_if(m_vSessions, [PSESSION](const auto& s) { return s.get() == PSESSION; });
     };
