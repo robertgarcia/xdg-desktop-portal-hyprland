@@ -560,13 +560,18 @@ void CPortalManager::startEventLoop() {
             }
         }
 
+        // A callback may add timers, which can reallocate the vector: iterate by index over
+        // the timers present now, and hold the CTimer itself, whose address is stable.
+        // Added timers run on a later iteration.
         std::vector<CTimer*> toRemove;
-        for (auto& t : m_sTimersThread.timers) {
-            if (t->passed()) {
-                t->m_fnCallback();
-                toRemove.emplace_back(t.get());
-                Debug::log(TRACE, "[core] calling timer {}", (void*)t.get());
-            }
+        const size_t         TIMERS = m_sTimersThread.timers.size();
+        for (size_t i = 0; i < TIMERS; ++i) {
+            CTimer* timer = m_sTimersThread.timers[i].get();
+            if (!timer->passed())
+                continue;
+            toRemove.emplace_back(timer);
+            Debug::log(TRACE, "[core] calling timer {}", (void*)timer);
+            timer->m_fnCallback();
         }
 
         int ret = 0;
