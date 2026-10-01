@@ -570,20 +570,15 @@ void CRemoteDesktopPortal::processEISEvents() {
             }
             case EIS_EVENT_SCROLL_DISCRETE: {
                 if (s->virtualPointer) {
-                    int dx = eis_event_scroll_get_discrete_dx(event);
-                    int dy = eis_event_scroll_get_discrete_dy(event);
-                    uint32_t axis;
-                    int      steps;
-                    if (dy != 0) {
-                        axis  = 0;
-                        steps = dy;
-                    } else if (dx != 0) {
-                        axis  = 1;
-                        steps = dx;
-                    } else
-                        break;
-                    s->virtualPointer->sendAxisSource(2);
-                    s->virtualPointer->sendAxisDiscrete(time, axis, wl_fixed_from_int(steps * 15), steps);
+                    // libei discrete scroll is in 1/120 of a wheel click, not in clicks.
+                    // Forwarding it as clicks scrolled 120 times too far.
+                    const int32_t V120[2] = {eis_event_scroll_get_discrete_dy(event), eis_event_scroll_get_discrete_dx(event)};
+                    for (uint32_t axis = 0; axis < 2; ++axis) {
+                        if (V120[axis] == 0)
+                            continue;
+                        s->virtualPointer->sendAxisSource(0 /* wheel */);
+                        s->virtualPointer->sendAxisDiscrete(time, axis, wl_fixed_from_double(15.0 * V120[axis] / 120.0), V120[axis] / 120);
+                    }
                 }
                 break;
             }
